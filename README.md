@@ -1,36 +1,133 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# 🔒 Redacted Chat
 
-## Getting Started
+A real-time, zero-trace chat application built for absolute privacy. Messages are ephemeral, rooms self-destruct, and the server never sees your data.
 
-First, run the development server:
+> _Conversations that leave no metadata, no server logs, and absolutely no trace._
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## ✨ Features
+
+- **Ephemeral Rooms** — Every room is bound to a strict 10-minute TTL. When time runs out, the data is dropped completely from the database.
+- **Instant Nuke** — The room creator can hit "Destroy Now" to forcefully disconnect all users and wipe the room from existence immediately.
+- **Token-Based Access Control** — Users are issued secure, `httpOnly` auth tokens via a middleware proxy on room entry. No passwords, no accounts.
+- **2-Person Rooms** — Rooms are capped at two participants. If the room is full, newcomers are redirected back to the lobby.
+- **Anonymous Identities** — Users are auto-assigned randomized codenames (e.g. `anonymous-Wolf-x8kQ2`) stored only in their browser's local storage.
+- **Real-Time Messaging** — Powered by Upstash Realtime for instant message delivery over server-sent events.
+- **Schema-Validated Payloads** — All API inputs are validated with Zod to prevent malformed or oversized payloads.
+
+---
+
+## 🏗️ Architecture
+
+```
+┌─────────────┐       Eden Treaty        ┌──────────────────┐
+│   Browser    │ ◄────────────────────► │  Next.js + Elysia │
+│  (React 19)  │                         │    API Routes     │
+└──────┬───────┘                         └────────┬─────────┘
+       │                                          │
+       │  SSE (Upstash Realtime)                  │  Redis Commands
+       │                                          │
+       ▼                                          ▼
+┌──────────────┐                         ┌──────────────────┐
+│   Realtime   │ ◄──────────────────── │  Upstash Redis    │
+│   Client     │                         │  (Serverless)     │
+└──────────────┘                         └──────────────────┘
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**How it works:**
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+1. A user creates a room → the server generates a unique Room ID and stores metadata in Redis with a TTL.
+2. When a second user navigates to the room URL, the middleware proxy validates room capacity, issues an auth token cookie, and registers them in Redis.
+3. Messages flow in real-time via Upstash Realtime (SSE). The Elysia API handles message posting with Zod-validated schemas.
+4. When the TTL expires (or the creator hits "Destroy"), Redis drops all room data — messages, metadata, everything.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## 🛠️ Tech Stack
 
-To learn more about Next.js, take a look at the following resources:
+| Layer | Technology |
+|---|---|
+| **Framework** | [Next.js 16](https://nextjs.org/) (App Router) |
+| **UI** | [React 19](https://react.dev/) + [Tailwind CSS 4](https://tailwindcss.com/) |
+| **API** | [Elysia.js](https://elysiajs.com/) (running inside Next.js API routes) |
+| **Client SDK** | [Eden Treaty](https://elysiajs.com/eden/treaty) (end-to-end type-safe API client) |
+| **Database** | [Upstash Redis](https://upstash.com/redis) (serverless, with TTL support) |
+| **Realtime** | [Upstash Realtime](https://upstash.com/docs/realtime) (server-sent events) |
+| **Validation** | [Zod](https://zod.dev/) (runtime schema validation) |
+| **State Management** | [TanStack React Query](https://tanstack.com/query) |
+| **ID Generation** | [nanoid](https://github.com/ai/nanoid) |
+| **Runtime** | [Bun](https://bun.sh/) |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 🚀 Getting Started
 
-## Deploy on Vercel
+### Prerequisites
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- [Bun](https://bun.sh/) (v1.0+)
+- An [Upstash](https://upstash.com/) account (for Redis and Realtime)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Setup
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/ArAnirudh2901/Redacted-Chat.git
+   cd Redacted-Chat
+   ```
+
+2. **Install dependencies**
+
+   ```bash
+   bun install
+   ```
+
+3. **Configure environment variables**
+
+   Create a `.env.local` file in the project root:
+
+   ```env
+   UPSTASH_REDIS_REST_URL=your_redis_url
+   UPSTASH_REDIS_REST_TOKEN=your_redis_token
+   ```
+
+4. **Start the dev server**
+
+   ```bash
+   bun dev
+   ```
+
+   The app will be running at [http://localhost:3000](http://localhost:3000).
+
+---
+
+## 📁 Project Structure
+
+```
+src/
+├── app/
+│   ├── api/[[...slugs]]/
+│   │   ├── route.js          # Elysia API routes (room creation, messaging)
+│   │   └── auth.js           # Auth middleware (token validation)
+│   ├── realtime/
+│   │   └── route.js          # Upstash Realtime SSE handler
+│   ├── room/[roomId]/
+│   │   └── page.jsx          # Chat room UI
+│   ├── page.js               # Landing page (room creation)
+│   └── layout.js             # Root layout with providers
+├── components/
+│   └── providers.jsx         # React Query + Realtime providers
+├── lib/
+│   ├── client.js             # Eden Treaty API client
+│   ├── redis.js              # Upstash Redis instance
+│   ├── realtime.js           # Server-side Realtime instance + schemas
+│   └── realtime-client.js    # Client-side Realtime hooks
+└── proxy.js                  # Middleware proxy (room access control)
+```
+
+---
+
+## 📝 License
+
+This project is open source and available under the [MIT License](LICENSE).
