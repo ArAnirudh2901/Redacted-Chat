@@ -20,6 +20,13 @@ const rooms = new Elysia({ prefix: "/room" })
 
         return { roomId }
     })
+    .get("/ttl", async ({ query }) => {
+        const { roomId } = query
+        if (!roomId) return { ttl: -1 }
+
+        const ttl = await redis.ttl(`meta:${roomId}`)
+        return { ttl }
+    })
 
 const bodySchema = z.object({
     sender: z.string().max(1_000_000),
@@ -62,6 +69,19 @@ const messages = new Elysia({ prefix: "/messages" })
 
         return { success: true }
     })
+    .get("/", async ({ auth }) => {
+        const messages = await redis.lrange(`messages:${auth.roomId}`, 0, -1)
+
+        return {
+            messages: messages.map((raw) => {
+                const m = typeof raw === 'string' ? JSON.parse(raw) : raw
+                return {
+                    ...m,
+                    token: m.token === auth.token ? auth.token : undefined
+                }
+            })
+        }
+    }, { query: z.object({ roomId: z.string() }) })
 
 export const app = new Elysia({ prefix: '/api' })
     .onError(({ code, error, set }) => {
