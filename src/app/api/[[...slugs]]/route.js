@@ -3,6 +3,7 @@ import { Elysia, t } from 'elysia'
 import { nanoid } from 'nanoid'
 import { authMiddleware } from './auth'
 import z from 'zod'
+import { realtime } from '@/lib/realtime'
 
 const ROOM_TTL_SECONDS = 60 * 10
 
@@ -11,7 +12,7 @@ const rooms = new Elysia({ prefix: "/room" })
         const roomId = nanoid()
 
         await redis.hset(`meta:${roomId}`, {
-            connected: [],
+            connected: JSON.stringify([]),
             createdAt: Date.now(),
         })
 
@@ -27,7 +28,7 @@ const bodySchema = z.object({
 
 const messages = new Elysia({ prefix: "/messages" })
     .use(authMiddleware)
-    .post("/", async ({ auth, body }) => {
+    .post("/", async ({ body, auth }) => {
         const { sender, text } = bodySchema.parse(body)
         const { roomId } = auth
 
@@ -36,7 +37,30 @@ const messages = new Elysia({ prefix: "/messages" })
         if (!roomExists)
             throw new Error("Room does not exist.")
 
+        const message = {
+            id: nanoid(),
+            sender,
+            text,
+            timestamp: Date.now(),
+            roomId
+        }
 
+        // Now we have the message that has been sent in the memory 
+        // So we then add this message to the chat history to view it
+        await redis.rpush(`messages:${roomId}`, {
+            ...message,
+            token: auth.token,
+        })
+
+        await realtime.channel(roomId).emit("chat.message", message)
+
+        // Expiration of the room
+        const remTime = await redis.ttl(`meta:${roomId}`)
+        await redis.expire(`messages:${roomId}`, remTime)
+        await redis.expire(`history:${roomId}`, remTime)
+        await redis.expire(roomId, remTime)
+
+        return { success: true }
     })
 
 export const app = new Elysia({ prefix: '/api' })

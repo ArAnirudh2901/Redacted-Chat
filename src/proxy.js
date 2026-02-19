@@ -17,7 +17,12 @@ export const proxy = async (req) => {
         return NextResponse.redirect(new URL("/?error=room-not-found", req.url))
     }
 
-    const connected = JSON.parse(/** @type {string} */(meta.connected || "[]"))
+    let connected = []
+    try {
+        connected = JSON.parse(/** @type {string} */(meta.connected))
+    } catch {
+        // fallback to empty array if data is malformed
+    }
 
     const existingToken = req.cookies.get("x-auth-token")?.value
     // If the user was in the chat room previosly and just refreshed the browser, the user is allowed to join the room

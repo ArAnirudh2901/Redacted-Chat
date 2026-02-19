@@ -1,7 +1,12 @@
 "use client"
 
+import { useUsername } from "@/hooks/use-username"
+import { client } from "@/lib/client"
+import { useMutation } from "@tanstack/react-query"
 import { useParams } from "next/navigation"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+
+const STORAGE_KEY = "chat_username"
 
 const formatTimeRemaining = (seconds) => {
     const mins = Math.floor(seconds / 60)
@@ -12,17 +17,48 @@ const formatTimeRemaining = (seconds) => {
 
 const Page = () => {
     const params = useParams()
-    const roomId = String(params.roomId)
+    const roomIdParam = params?.roomId
+    const roomId = Array.isArray(roomIdParam) ? (roomIdParam[0] ?? "") : (roomIdParam ?? "")
     const [input, setInput] = useState("")
     const inputRef = useRef(null)
 
+    const { username } = useUsername()
     const [copyStatus, setStatus] = useState("COPY")
     const [timeRemaining, setTimeRemaining] = useState(3)
 
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setTimeRemaining((prev) => Math.max(prev - 1, 0))
+        }, 1000)
+
+        return () => clearInterval(timer)
+    }, [])
+
+    /** @type {{ messages: { post: (body: { sender: string, text: string }, options: { query: { roomId: string } }) => Promise<unknown> } }} */
+    const api = /** @type {any} */ (client)
+
+    const { mutate } = useMutation(
+        ({
+            mutationFn: async (/** @type {{ text: string }} */{ text }) => {
+                await api.messages.post({ sender: username, text }, { query: { roomId } })
+            }
+        })
+    )
+
     const copyLink = () => {
+        if (!roomId) return
         navigator.clipboard.writeText(roomId)
         setStatus("COPIED")
         setTimeout(() => setStatus("COPY"), 2000)
+    }
+
+    const sendMessage = () => {
+        const text = input.trim()
+        if (!text || !roomId) return
+
+        mutate({ text })
+        setInput("")
+        inputRef.current?.focus()
     }
 
 
@@ -52,7 +88,7 @@ const Page = () => {
                 </div>
 
                 {/* Destroy Button - Right */}
-                <div className="justify-self-end mb-1.25">
+                <div className="justify-self-end mb-1">
                     <button className="text-xs bg-zinc-800 hover:bg-red-600 px-3 py-1.5 rounded text-zinc-400 hover:text-white font-bold transition-all group flex items-center gap-2 disabled:opacity-50">
                         <span className="group-hover:animate-pulse">💣</span>
                         DESTROY NOW
@@ -69,19 +105,23 @@ const Page = () => {
                     <div className="flex-1 relative group">
                         <span className="absolute left-4 top-1/2  -translate-y-1/2 text-green-500 animate-pulse">{">"}</span>
                         <input
+                            ref={inputRef}
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => {
                                 if (e.key === "Enter" && input.trim()) {
-                                    // TODO: Send Message
-                                    inputRef.current?.focus()
+                                    sendMessage()
                                 }
                             }}
                             placeholder=" Type message..."
                             autoFocus type="text"
                             className="w-full bg-black border border-zinc-800 focus:border-zinc-700 focus:outline-none transition-colors text-zinc-100 placeholder:text-zinc-700 py-3 pl-8 pr-4 text-sm" />
                     </div>
-                    <button className="bg-zinc-800 text-zinc-400 w-28 py-3 text-sm font-bold hover:text-zinc-200 hover:bg-zinc-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">SEND</button>
+                    <button
+                        onClick={sendMessage}
+                        disabled={!input.trim()}
+                        className="bg-zinc-800 text-zinc-400 w-28 py-3 text-sm font-bold hover:text-zinc-200 hover:bg-zinc-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >SEND</button>
                 </div>
             </div>
         </main>
