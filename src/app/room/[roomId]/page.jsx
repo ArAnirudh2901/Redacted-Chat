@@ -2,6 +2,7 @@
 
 import { useUsername } from "@/hooks/use-username"
 import { client } from "@/lib/client"
+import { useRealtime } from "@/lib/realtime-client"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { useParams } from "next/navigation"
@@ -62,7 +63,7 @@ const Page = () => {
         return () => clearInterval(timer)
     }, [timeRemaining !== null])
 
-    const { data: messages } = useQuery({
+    const { data: messages, refetch } = useQuery({
         queryKey: ["messages", roomId],
 
         queryFn: async () => {
@@ -74,18 +75,28 @@ const Page = () => {
     /** @type {{ messages: { post: (body: { sender: string, text: string }, options: { query: { roomId: string } }) => Promise<unknown> } }} */
     const api = /** @type {any} */ (client)
 
-    const queryClient = useQueryClient()
+    // const queryClient = useQueryClient()
 
     const { mutate, isPending } = useMutation(
         ({
             mutationFn: async (/** @type {{ text: string }} */{ text }) => {
                 await api.messages.post({ sender: username, text }, { query: { roomId } })
             },
-            onSettled: () => {
-                queryClient.invalidateQueries({ queryKey: ["messages", roomId] })
-            },
+            // onSettled: () => {
+            //     queryClient.invalidateQueries({ queryKey: ["messages", roomId] })
+            // },
         })
     )
+
+    useRealtime({
+        channels: [roomId],
+        events: ["chat.message", "chat.destroy"],
+        onData: ({ event }) => {
+            if (event === "chat.message") {
+                refetch()
+            }
+        }
+    })
 
     const copyLink = () => {
         if (!roomId) return
