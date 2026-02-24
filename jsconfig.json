@@ -1,7 +1,15 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "preserve",
     "checkJs": true,
+    "skipLibCheck": true,
     "module": "esnext",
     "moduleResolution": "bundler",
     "paths": {
@@ -9,5 +17,9 @@
         "./src/*"
       ]
     }
-  }
+  },
+  "exclude": [
+    "node_modules",
+    ".next"
+  ]
 }

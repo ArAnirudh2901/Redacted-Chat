@@ -2,6 +2,9 @@
 const nextConfig = {
   /* config options here */
   reactCompiler: true,
+  serverExternalPackages: [
+    "sharp",
+  ],
 };
 
 export default nextConfig;

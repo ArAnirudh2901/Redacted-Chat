@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 @theme inline {
@@ -12,15 +12,425 @@
   --font-mono: var(--font-jetbrains-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-jetbrains-mono);
+  touch-action: manipulation;
+  overflow-x: hidden;
+}
+
+/* ── Cyberpunk scanline overlay ── */
+.scanline-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background: repeating-linear-gradient(0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.04) 2px,
+      rgba(0, 0, 0, 0.04) 4px);
+}
+
+/* ── Subtle grid background for chat area ── */
+.cyber-grid-bg {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.03) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* ── Glow effects ── */
+.glow-green {
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.15), 0 0 20px rgba(34, 197, 94, 0.05);
+}
+
+.glow-red {
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.2), 0 0 20px rgba(239, 68, 68, 0.08);
+}
+
+.glow-teal {
+  box-shadow: 0 0 12px rgba(45, 212, 191, 0.2), 0 0 30px rgba(45, 212, 191, 0.06);
+}
+
+/* ── Glassmorphism ── */
+.glass {
+  background: rgba(10, 10, 10, 0.55);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-light {
+  background: rgba(24, 24, 27, 0.4);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* ── 3D perspective container ── */
+.card-3d {
+  perspective: 800px;
+  transform-style: preserve-3d;
+}
+
+/* ── Floating bob animation ── */
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* ── Scanning line for buttons ── */
+@keyframes scan-line {
+  0% {
+    left: -30%;
+  }
+
+  100% {
+    left: 130%;
+  }
+}
+
+.scan-line-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.scan-line-btn::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -30%;
+  width: 30%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(34, 197, 94, 0.12), transparent);
+  transform: skewX(-15deg);
+  transition: none;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.scan-line-btn:hover::after {
+  opacity: 1;
+  animation: scan-line 0.8s ease-in-out;
+}
+
+/* ── Custom scrollbar (hidden by default, shows on hover) ── */
+.custom-scrollbar {
+  scrollbar-width: none;
+}
+
+.custom-scrollbar:hover {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(63, 63, 70, 0.5) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.3s ease;
+}
+
+.custom-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgba(63, 63, 70, 0.5);
+}
+
+.custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.6);
+}
+
+/* ── Pulsing glow for timer ── */
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 6px currentColor;
+  }
+
+  50% {
+    opacity: 0.6;
+    text-shadow: 0 0 12px currentColor, 0 0 24px currentColor;
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* ── Flicker effect (subtle CRT) ── */
+@keyframes flicker {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  92% {
+    opacity: 1;
+  }
+
+  93% {
+    opacity: 0.7;
+  }
+
+  94% {
+    opacity: 1;
+  }
+
+  96% {
+    opacity: 0.85;
+  }
+
+  97% {
+    opacity: 1;
+  }
+}
+
+.animate-flicker {
+  animation: flicker 4s ease-in-out infinite;
+}
+
+/* ── Typing cursor blink ── */
+@keyframes blink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* ── Shimmer effect for loading / identity ── */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg,
+      rgba(63, 63, 70, 0.0) 0%,
+      rgba(63, 63, 70, 0.25) 50%,
+      rgba(63, 63, 70, 0.0) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+/* ── Destroy button shake on hover ── */
+@keyframes shake {
+
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  20% {
+    transform: translateX(-2px) rotate(-1deg);
+  }
+
+  40% {
+    transform: translateX(2px) rotate(1deg);
+  }
+
+  60% {
+    transform: translateX(-1px) rotate(-0.5deg);
+  }
+
+  80% {
+    transform: translateX(1px) rotate(0.5deg);
+  }
+}
+
+.hover-shake:hover {
+  animation: shake 0.5s ease-in-out;
+}
+
+/* ── Subtle border glow pulse for active elements ── */
+@keyframes border-pulse {
+
+  0%,
+  100% {
+    border-color: rgba(34, 197, 94, 0.2);
+  }
+
+  50% {
+    border-color: rgba(34, 197, 94, 0.45);
+  }
+}
+
+.animate-border-pulse {
+  animation: border-pulse 3s ease-in-out infinite;
+}
+
+/* ── Nuke overlay layers ── */
+.nuke-overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+[data-nuke-el].nuke-dissolving {
+  opacity: 0 !important;
+  transition: opacity 500ms ease-out !important;
+}
+
+.dust {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  will-change: transform, opacity, filter;
+}
+
+/* ── Typing dots animation ── */
+@keyframes typing-dot {
+
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.8);
+  }
+
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.typing-dot-1 {
+  animation: typing-dot 1.4s ease-in-out infinite;
+}
+
+.typing-dot-2 {
+  animation: typing-dot 1.4s ease-in-out 0.2s infinite;
+}
+
+.typing-dot-3 {
+  animation: typing-dot 1.4s ease-in-out 0.4s infinite;
+}
+
+/* ── Message bubble hover ── */
+.message-bubble {
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.message-bubble:hover {
+  transform: translateY(-1px) scale(1.005);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3), 0 0 8px rgba(34, 197, 94, 0.05);
+  border-color: rgba(34, 197, 94, 0.15) !important;
+}
+
+/* ── Landing page background animation ── */
+@keyframes grid-shift {
+  0% {
+    background-position: 0 0;
+  }
+
+  100% {
+    background-position: 24px 24px;
+  }
+}
+
+.landing-grid-bg {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(34, 197, 94, 0.04) 1px, transparent 0);
+  background-size: 24px 24px;
+  animation: grid-shift 8s linear infinite;
+}
+
+/* ── Focus ring for input ── */
+@keyframes focus-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+  }
+
+  50% {
+    box-shadow: 0 0 16px rgba(255, 255, 255, 0.06);
+  }
+}
+
+.input-focus-glow:focus-within {
+  animation: focus-glow 2s ease-in-out infinite;
+}
+
+/* ── Styled range slider ── */
+.styled-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: rgba(63, 63, 70, 0.5);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.styled-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgb(34, 197, 94);
+  border: 2px solid rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+.styled-range::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.6);
+  transform: scale(1.15);
+}
+
+.styled-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgb(34, 197, 94);
+  border: 2px solid rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+  cursor: pointer;
+}
+
+.styled-range::-moz-range-track {
+  height: 6px;
+  background: rgba(63, 63, 70, 0.5);
+  border-radius: 3px;
 }
