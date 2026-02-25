@@ -3613,7 +3613,7 @@ const Page = () => {
                                     key="send-btn"
                                     onClick={sendMessage}
                                     disabled={(!hasInput && !isSendFxActive) || isPending}
-                                    className={`micro-btn relative w-[80fpx] h-[52px] flex items-center justify-center rounded-md border overflow-hidden transition-colors cursor-pointer ${isSendArmed
+                                    className={`micro-btn relative w-[3.75rem] h-[2.75rem] sm:w-[4.25rem] sm:h-[3rem] lg:w-[4.75rem] lg:h-[3.25rem] flex items-center justify-center rounded-md border overflow-hidden transition-colors cursor-pointer ${isSendArmed
                                         ? "bg-green-950/35 hover:bg-green-900/35 border-green-500/70 text-green-400"
                                         : "bg-zinc-900 border-zinc-700/50 text-zinc-500"
                                         } ${isSendArmed
@@ -3649,11 +3649,11 @@ const Page = () => {
 
                                     <div className="relative z-10 flex items-center justify-center">
                                         <motion.span
-                                            className="will-change-transform w-4 h-4 flex items-center justify-center"
+                                            className="will-change-transform w-[1rem] h-[1rem] sm:w-[1.1rem] sm:h-[1.1rem] lg:w-[1.2rem] lg:h-[1.2rem] flex items-center justify-center"
                                             initial={SEND_PLANE_REST_ANIMATION}
                                             animate={sendPlaneControls}
                                         >
-                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                                 <path
                                                     d="M22 2 11 13"
                                                     stroke="currentColor"
