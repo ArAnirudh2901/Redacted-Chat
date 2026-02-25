@@ -3,10 +3,11 @@
 import { Suspense, useEffect, useState } from "react"
 import { useAuth } from "@/hooks/use-auth"
 import { useRouter, useSearchParams } from "next/navigation"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion"
 import Link from "next/link"
+import { DUR_BASE, DUR_FAST, DUR_SLOW, EASE_STANDARD, SPRING_SNAPPY } from "@/lib/motion-tokens"
 
-const ease = /** @type {[number, number, number, number]} */ ([0.22, 1, 0.36, 1])
+const ease = EASE_STANDARD
 
 export default function AuthPage() {
     return (
@@ -17,6 +18,7 @@ export default function AuthPage() {
 }
 
 function AuthContent() {
+    const prefersReducedMotion = useReducedMotion()
     const [mode, setMode] = useState("login") // "login" | "signup"
     const [username, setUsername] = useState("")
     const [email, setEmail] = useState("")
@@ -67,22 +69,22 @@ function AuthContent() {
             <motion.div
                 className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full pointer-events-none"
                 style={{ background: "radial-gradient(circle, rgba(34,197,94,0.04) 0%, transparent 70%)" }}
-                animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
-                transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+                animate={prefersReducedMotion ? { opacity: 0.55 } : { scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
+                transition={prefersReducedMotion ? { duration: DUR_BASE, ease } : { duration: 6, repeat: Infinity, ease: "easeInOut" }}
             />
 
             <motion.div
                 className="w-full max-w-sm relative z-10 px-4 sm:px-0"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, ease }}
+                transition={{ duration: DUR_SLOW, ease }}
             >
                 {/* Lock icon */}
                 <motion.div
                     className="flex justify-center mb-6"
                     initial={{ opacity: 0, scale: 0.5 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.6, delay: 0.05, ease }}
+                    transition={{ duration: DUR_SLOW, delay: 0.05, ease }}
                 >
                     <div className="w-12 h-12 rounded-full border border-green-500/20 bg-green-500/5 flex items-center justify-center">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-green-500">
@@ -108,26 +110,29 @@ function AuthContent() {
                     className="border border-zinc-800 bg-zinc-900/50 backdrop-blur-md rounded-sm overflow-hidden"
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5, delay: 0.15, ease }}
+                    transition={{ duration: DUR_SLOW, delay: 0.15, ease }}
                 >
                     {/* Mode toggle */}
                     <div className="flex border-b border-zinc-800/60">
                         {["login", "signup"].map((m) => (
-                            <button
+                            <motion.button
                                 key={m}
+                                type="button"
                                 onClick={() => { setMode(m); setError("") }}
                                 className={`flex-1 py-3 text-xs font-bold uppercase tracking-widest transition-colors relative ${mode === m ? "text-green-400" : "text-zinc-600 hover:text-zinc-400"
                                     }`}
+                                whileTap={prefersReducedMotion ? {} : { scale: 0.98 }}
+                                transition={{ duration: DUR_FAST, ease }}
                             >
                                 {m === "login" ? "Sign In" : "Sign Up"}
                                 {mode === m && (
                                     <motion.div
                                         layoutId="authTab"
                                         className="absolute bottom-0 left-0 right-0 h-0.5 bg-green-500"
-                                        transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                                        transition={SPRING_SNAPPY}
                                     />
                                 )}
-                            </button>
+                            </motion.button>
                         ))}
                     </div>
 
@@ -139,7 +144,7 @@ function AuthContent() {
                                     initial={{ height: 0, opacity: 0 }}
                                     animate={{ height: "auto", opacity: 1 }}
                                     exit={{ height: 0, opacity: 0 }}
-                                    transition={{ duration: 0.2 }}
+                                    transition={{ duration: DUR_FAST, ease }}
                                     className="overflow-hidden"
                                 >
                                     <div className="space-y-1.5">
@@ -203,9 +208,10 @@ function AuthContent() {
                             {error && (
                                 <motion.div
                                     className="text-red-400 text-xs font-bold bg-red-950/30 border border-red-900/30 px-3 py-2 rounded-sm"
-                                    initial={{ opacity: 0, y: -5 }}
-                                    animate={{ opacity: 1, y: 0 }}
+                                    initial={{ opacity: 0, y: -5, scale: 0.98 }}
+                                    animate={{ opacity: 1, y: 0, scale: 1 }}
                                     exit={{ opacity: 0 }}
+                                    transition={{ duration: DUR_FAST, ease }}
                                 >
                                     ⚠ {error}
                                 </motion.div>
@@ -216,19 +222,50 @@ function AuthContent() {
                             type="submit"
                             disabled={isLoading}
                             className="w-full bg-green-600/20 hover:bg-green-600/30 border border-green-500/30 hover:border-green-400/40 text-green-400 hover:text-green-300 py-2.5 text-sm font-bold rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                            whileHover={{ scale: 1.01 }}
-                            whileTap={{ scale: 0.99 }}
+                            whileHover={prefersReducedMotion ? {} : { scale: 1.01 }}
+                            whileTap={prefersReducedMotion ? {} : { scale: 0.99 }}
+                            animate={isLoading ? { opacity: 0.9 } : { opacity: 1 }}
+                            transition={{ duration: DUR_FAST, ease }}
                         >
-                            {isLoading ? (
-                                <span className="flex items-center justify-center gap-2">
-                                    <motion.svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-green-400" animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
-                                        <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
-                                    </motion.svg>
-                                    {mode === "login" ? "Signing in..." : "Creating account..."}
-                                </span>
-                            ) : (
-                                mode === "login" ? "Sign In" : "Create Account"
-                            )}
+                            <AnimatePresence mode="wait" initial={false}>
+                                {isLoading ? (
+                                    <motion.span
+                                        key="auth-loading"
+                                        className="flex items-center justify-center gap-2"
+                                        initial={{ opacity: 0, y: -4 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: 4 }}
+                                        transition={{ duration: DUR_FAST, ease }}
+                                    >
+                                        <motion.svg
+                                            width="14"
+                                            height="14"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2.5"
+                                            className="text-green-400"
+                                            animate={prefersReducedMotion ? { opacity: [0.55, 1, 0.55] } : { rotate: 360 }}
+                                            transition={prefersReducedMotion
+                                                ? { duration: DUR_BASE, repeat: Infinity, ease }
+                                                : { duration: 1, repeat: Infinity, ease: "linear" }}
+                                        >
+                                            <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+                                        </motion.svg>
+                                        {mode === "login" ? "Signing in..." : "Creating account..."}
+                                    </motion.span>
+                                ) : (
+                                    <motion.span
+                                        key={`auth-idle-${mode}`}
+                                        initial={{ opacity: 0, y: -4 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: 4 }}
+                                        transition={{ duration: DUR_FAST, ease }}
+                                    >
+                                        {mode === "login" ? "Sign In" : "Create Account"}
+                                    </motion.span>
+                                )}
+                            </AnimatePresence>
                         </motion.button>
 
                         <div className="flex items-center gap-3 py-1">
@@ -254,7 +291,7 @@ function AuthContent() {
                     className="text-center mt-4"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: 0.4 }}
+                    transition={{ duration: DUR_BASE, delay: 0.4, ease }}
                 >
                     <Link
                         href="/"

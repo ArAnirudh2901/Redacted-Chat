@@ -2,12 +2,14 @@
 
 import { useAuth } from "@/hooks/use-auth"
 import { useQuery } from "@tanstack/react-query"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
+import { DUR_BASE, DUR_FAST, EASE_STANDARD, SPRING_SNAPPY } from "@/lib/motion-tokens"
 
 export function Sidebar() {
+    const prefersReducedMotion = useReducedMotion()
     const { user, logout } = useAuth()
     const [isOpen, setIsOpen] = useState(false)
     const [isPinned, setIsPinned] = useState(() => {
@@ -96,8 +98,9 @@ export function Sidebar() {
             <motion.button
                 onClick={toggleSidebar}
                 aria-label={toggleLabel}
-                className={`fixed top-3 ${toggleButtonPlacement} z-50 w-8 h-8 flex items-center justify-center rounded-sm border border-zinc-700/50 bg-zinc-900/90 backdrop-blur-sm hover:bg-zinc-800/80 text-zinc-400 hover:text-green-400 transition-colors shadow-lg`}
-                whileTap={{ scale: 0.9 }}
+                className={`fixed top-2 ${toggleButtonPlacement === "left-3" ? "left-2" : toggleButtonPlacement} z-50 w-8 h-8 flex items-center justify-center rounded-sm border border-zinc-700/50 bg-zinc-900/90 backdrop-blur-sm hover:bg-zinc-800/80 text-zinc-400 hover:text-green-400 transition-colors shadow-lg`}
+                whileTap={prefersReducedMotion ? {} : { scale: 0.9 }}
+                transition={{ duration: DUR_FAST, ease: EASE_STANDARD }}
             >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
                     {panelPinned ? (
@@ -132,7 +135,9 @@ export function Sidebar() {
                             initial={panelPinned ? { x: 0, opacity: 1 } : { x: "-100%" }}
                             animate={{ x: 0 }}
                             exit={panelPinned ? { x: 0, opacity: 1 } : { x: "-100%" }}
-                            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                            transition={prefersReducedMotion
+                                ? /** @type {import("framer-motion").Transition} */ ({ duration: DUR_BASE, ease: EASE_STANDARD })
+                                : SPRING_SNAPPY}
                         >
                             <div className="px-4 pt-16 pb-4 border-b border-zinc-800/60">
                                 <div className={`flex items-center ${isPanelCollapsed ? "justify-center" : "gap-3"}`}>
@@ -183,7 +188,7 @@ export function Sidebar() {
                                                 href={`/room/${room.roomId}`}
                                                 onClick={() => { if (!panelPinned) setIsOpen(false) }}
                                                 title={room.roomId}
-                                                className={`flex items-center ${isPanelCollapsed ? "justify-center px-2" : "gap-3 px-3"} py-2.5 rounded-sm transition-colors group ${currentRoomId === room.roomId
+                                                className={`flex items-center ${isPanelCollapsed ? "justify-center px-2" : "gap-3 px-3"} py-2.5 rounded-sm transition-[color,background-color,border-color,transform] duration-200 group hover:translate-x-[1px] motion-reduce:hover:translate-x-0 ${currentRoomId === room.roomId
                                                     ? "bg-green-950/30 border border-green-900/40"
                                                     : "hover:bg-zinc-800/50 border border-transparent"
                                                     }`}

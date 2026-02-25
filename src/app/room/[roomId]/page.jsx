@@ -6,8 +6,8 @@ import { client } from "@/lib/client"
 import { useRealtime } from "@/lib/realtime-client"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
-import { motion, AnimatePresence } from "framer-motion"
-import toast, { Toaster } from "react-hot-toast"
+import { motion, AnimatePresence, useAnimationControls, useReducedMotion } from "framer-motion"
+import { toast } from "sonner"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
 import { useEffect, useRef, useState, useCallback, useMemo } from "react"
@@ -19,21 +19,557 @@ import { NukeController } from "@/components/nuke/nuke-controller"
 import { useNukeCapabilities } from "@/hooks/use-nuke-capabilities"
 import { CyberCanvas } from "@/components/cyber-canvas"
 import { clearRoomKey, decryptJsonEnvelope, encryptJsonEnvelope, readRoomKey } from "@/lib/secure-crypto"
-import { extractLosslessStegoPayload } from "@/lib/stego-lossless-client"
-import { decodeRds3StegoPng, encodeRds3StegoPng, isRds3WorkerSupported } from "@/lib/stego-rds3-worker-client"
+import { DUR_BASE, DUR_FAST, DUR_SLOW, EASE_STANDARD } from "@/lib/motion-tokens"
 
 /* ── Shared easing ── */
-const ease = /** @type {[number,number,number,number]} */ ([0.22, 1, 0.36, 1])
+const ease = EASE_STANDARD
 const PRESENCE_TTL_MS = 25000
 const PRESENCE_HEARTBEAT_MS = 8000
 const DISK_STREAM_THRESHOLD_BYTES = 100 * 1024 * 1024
 
 const SECURE_CACHE_MAX = 50
+const STEGO_PACKET_PREFIX = "STEGO_PACKET_V1:"
+const STEGO_PACKET_MAX_BYTES = 450 * 1024
+const STEGO_IMAGE_BUDGET_BYTES = 220 * 1024
+const FILE_PACKET_PREFIX = "FILE_PACKET_V1:"
+const FILE_IMAGE_PREVIEW_BUDGET_BYTES = 180 * 1024
+const FILE_IMAGE_PREVIEW_MAX_DIMENSION = 1080
+const FILE_IMAGE_PREVIEW_SOURCE_MAX_BYTES = 15 * 1024 * 1024
+const PANIC_SHORTCUT_STORAGE_PREFIX = "panic-shortcut:"
+const STEGO_IMAGE_COMPRESSION_STEPS = [
+    { scale: 1.0, quality: 0.9 },
+    { scale: 0.92, quality: 0.84 },
+    { scale: 0.85, quality: 0.78 },
+    { scale: 0.78, quality: 0.72 },
+    { scale: 0.7, quality: 0.66 },
+    { scale: 0.62, quality: 0.6 },
+    { scale: 0.55, quality: 0.54 },
+    { scale: 0.48, quality: 0.48 },
+    { scale: 0.42, quality: 0.42 },
+    { scale: 0.36, quality: 0.36 },
+    { scale: 0.3, quality: 0.32 },
+    { scale: 0.24, quality: 0.28 },
+    { scale: 0.2, quality: 0.24 },
+    { scale: 0.16, quality: 0.2 },
+    { scale: 0.12, quality: 0.18 },
+]
+const FILE_IMAGE_PREVIEW_STEPS = [
+    { scale: 1.0, quality: 0.88 },
+    { scale: 0.88, quality: 0.78 },
+    { scale: 0.76, quality: 0.7 },
+    { scale: 0.66, quality: 0.62 },
+    { scale: 0.56, quality: 0.55 },
+    { scale: 0.46, quality: 0.48 },
+]
+const VANISH_OPTIONS = [0, 5, 10, 30, 60, 300]
+const SEND_FX_ACTIVE_MS = 1300
+/** @type {[number, number, number, number]} */
+const SEND_FX_EASE = [0.16, 1, 0.3, 1]
+const SEND_PLANE_REST_ANIMATION = { x: 0, y: 0, rotate: 0, scale: 1, opacity: 1 }
+const SEND_PLANE_LAUNCH_ANIMATION = {
+    x: [0, 12, 34, 60, 92],
+    y: [0, -10, -24, -40, -58],
+    rotate: [0, 3, 5, 7, 9],
+    scale: [1, 1.03, 0.98, 0.9, 0.82],
+    opacity: [1, 1, 0.9, 0.42, 0],
+}
+const SEND_TRAIL_REST_ANIMATION = { x: -14, y: 4, rotate: -34, scaleX: 0.45, opacity: 0 }
+const SEND_TRAIL_LAUNCH_ANIMATION = {
+    x: [-8, 26, 58],
+    y: [4, -14, -32],
+    rotate: -34,
+    scaleX: [0.45, 1, 0.5],
+    opacity: [0, 0.95, 0],
+}
+const SEND_WIND_REST_ANIMATION = { x: -14, y: 10, rotate: -16, scaleX: 0.4, opacity: 0 }
+const SEND_WIND_LAUNCH_ANIMATION = {
+    x: [-10, 22, 50],
+    y: [12, 0, -18],
+    rotate: -16,
+    scaleX: [0.4, 1, 0.6],
+    opacity: [0, 0.98, 0],
+}
+const SEND_PLANE_RETURN_START = { x: -44, y: 28, rotate: 0, scale: 0.9, opacity: 0 }
+const SEND_PLANE_RETURN_END = SEND_PLANE_REST_ANIMATION
+/** @type {import("framer-motion").Transition} */
+const SEND_PLANE_LAUNCH_TRANSITION = { duration: 0.72, times: [0, 0.14, 0.38, 0.68, 1], ease: SEND_FX_EASE }
+/** @type {import("framer-motion").Transition} */
+const SEND_TRAIL_LAUNCH_TRANSITION = { duration: 0.46, times: [0, 0.35, 1], ease: SEND_FX_EASE }
+/** @type {import("framer-motion").Transition} */
+const SEND_WIND_LAUNCH_TRANSITION = { duration: 0.48, times: [0, 0.34, 1], ease: SEND_FX_EASE }
+/** @type {import("framer-motion").Transition} */
+const SEND_PLANE_RETURN_TRANSITION = { duration: 0.24, ease: EASE_STANDARD }
+const EMPTY_STATE_MATRIX_ITEMS = [
+    { char: "3", delay: 0, duration: 1.52 },
+    { char: "8", delay: 0.12, duration: 1.66 },
+    { char: "A", delay: 0.24, duration: 1.8 },
+    { char: "1", delay: 0.36, duration: 1.58 },
+    { char: "F", delay: 0.48, duration: 1.72 },
+    { char: "6", delay: 0.6, duration: 1.86 },
+    { char: "0", delay: 0.72, duration: 1.6 },
+    { char: "D", delay: 0.84, duration: 1.74 },
+    { char: "9", delay: 0.96, duration: 1.9 },
+]
 
 const formatTimeRemaining = (seconds) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return `${mins}:${secs.toString().padStart(2, "0")}`
+}
+
+/**
+ * @param {string} roomId
+ */
+function panicShortcutStorageKey(roomId) {
+    return `${PANIC_SHORTCUT_STORAGE_PREFIX}${roomId}`
+}
+
+/**
+ * @param {string} key
+ */
+function normalizeShortcutKey(key) {
+    if (typeof key !== "string" || key.length === 0) return ""
+    if (key === "Control" || key === "Meta" || key === "Alt" || key === "Shift") return ""
+    if (key === " ") return "Space"
+    if (key === "Escape") return "Esc"
+    if (key === "ArrowUp") return "Up"
+    if (key === "ArrowDown") return "Down"
+    if (key === "ArrowLeft") return "Left"
+    if (key === "ArrowRight") return "Right"
+    if (key.length === 1) return key.toUpperCase()
+    return key
+}
+
+/**
+ * @param {KeyboardEvent} event
+ */
+function shortcutFromEvent(event) {
+    if (!event || event.repeat) return ""
+    const key = normalizeShortcutKey(event.key)
+    if (!key) return ""
+    const parts = []
+    if (event.ctrlKey) parts.push("Ctrl")
+    if (event.metaKey) parts.push("Meta")
+    if (event.altKey) parts.push("Alt")
+    if (event.shiftKey) parts.push("Shift")
+    parts.push(key)
+    return parts.join("+")
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeParticipantName(value) {
+    if (typeof value !== "string") return ""
+    return value.trim().replace(/\s+/g, " ")
+}
+
+/**
+ * @param {string} name
+ */
+function participantKey(name) {
+    return normalizeParticipantName(name).toLocaleLowerCase()
+}
+
+/**
+ * @param {unknown} value
+ */
+function isDataImageUrl(value) {
+    return typeof value === "string" && value.startsWith("data:image/")
+}
+
+/**
+ * @param {unknown} value
+ */
+function utf8ByteLengthOf(value) {
+    const encoder = new TextEncoder()
+    return encoder.encode(String(value || "")).length
+}
+
+/**
+ * @param {number} bytes
+ */
+function formatFileSize(bytes) {
+    const normalized = Number.isFinite(bytes) ? Math.max(0, Number(bytes)) : 0
+    if (normalized < 1024) return `${normalized} B`
+    if (normalized < 1024 * 1024) return `${(normalized / 1024).toFixed(1)} KB`
+    if (normalized < 1024 * 1024 * 1024) return `${(normalized / (1024 * 1024)).toFixed(1)} MB`
+    return `${(normalized / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+/**
+ * @param {string} mimeType
+ */
+function formatFileTypeLabel(mimeType) {
+    if (typeof mimeType !== "string" || !mimeType) return "file"
+    if (mimeType.startsWith("image/")) return "image"
+    const [, subtype] = mimeType.split("/")
+    if (!subtype) return mimeType
+    return subtype.toUpperCase()
+}
+
+/**
+ * @param {File} file
+ */
+function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+            if (typeof reader.result === "string") {
+                resolve(reader.result)
+                return
+            }
+            reject(new Error("Failed to read file data"))
+        }
+        reader.onerror = () => reject(new Error("Failed to read file data"))
+        reader.readAsDataURL(file)
+    })
+}
+
+/**
+ * @param {string} src
+ */
+function loadPreviewImageElement(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image()
+        img.decoding = "async"
+        img.onload = () => resolve(img)
+        img.onerror = () => reject(new Error("Unable to load image preview"))
+        img.src = src
+    })
+}
+
+/**
+ * @param {HTMLImageElement} img
+ * @param {number} scale
+ * @param {number} quality
+ */
+function encodePreviewVariant(img, scale, quality) {
+    const sourceMax = Math.max(img.width, img.height)
+    const clampedScale = Number.isFinite(scale) ? Math.max(0.1, Math.min(1, scale)) : 1
+    const targetMax = Math.max(64, Math.round(sourceMax * clampedScale))
+    const resizeRatio = Math.min(1, targetMax / sourceMax)
+    const width = Math.max(1, Math.round(img.width * resizeRatio))
+    const height = Math.max(1, Math.round(img.height * resizeRatio))
+
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) throw new Error("Unable to initialize preview canvas")
+
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = "high"
+    ctx.drawImage(img, 0, 0, width, height)
+
+    const normalizedQuality = Number.isFinite(quality) ? Math.max(0.2, Math.min(0.95, quality)) : 0.82
+    const out = canvas.toDataURL("image/jpeg", normalizedQuality)
+    canvas.width = 0
+    canvas.height = 0
+    return out
+}
+
+/**
+ * @param {File} file
+ */
+async function buildImagePreviewDataUrl(file) {
+    if (!file?.type?.startsWith("image/")) return ""
+    if ((file.size || 0) > FILE_IMAGE_PREVIEW_SOURCE_MAX_BYTES) return ""
+
+    const dataUrl = /** @type {string} */ (await readFileAsDataUrl(file))
+    const img = /** @type {HTMLImageElement} */ (await loadPreviewImageElement(dataUrl))
+    const sourceMax = Math.max(img.width, img.height)
+    const baseScale = sourceMax > FILE_IMAGE_PREVIEW_MAX_DIMENSION ? (FILE_IMAGE_PREVIEW_MAX_DIMENSION / sourceMax) : 1
+    const candidates = []
+    const seen = new Set()
+
+    const addCandidate = (candidate) => {
+        if (!candidate || seen.has(candidate)) return
+        seen.add(candidate)
+        candidates.push(candidate)
+    }
+
+    for (const step of FILE_IMAGE_PREVIEW_STEPS) {
+        try {
+            addCandidate(encodePreviewVariant(img, baseScale * step.scale, step.quality))
+        } catch {
+            // Keep trying lower quality previews.
+        }
+    }
+
+    if (candidates.length === 0) return ""
+    for (const candidate of candidates) {
+        if (utf8ByteLengthOf(candidate) <= FILE_IMAGE_PREVIEW_BUDGET_BYTES) return candidate
+    }
+    return candidates[candidates.length - 1]
+}
+
+/**
+ * @param {{ previewImage: string, hiddenImage?: string, secretText?: string }} packet
+ */
+function buildStegoPacket(packet) {
+    const payload = {
+        v: 1,
+        p: packet.previewImage || "",
+        h: packet.hiddenImage || "",
+        t: packet.secretText || "",
+        c: Date.now(),
+    }
+    return `${STEGO_PACKET_PREFIX}${JSON.stringify(payload)}`
+}
+
+/**
+ * @param {unknown} raw
+ */
+function parseStegoPacket(raw) {
+    if (typeof raw !== "string" || !raw.startsWith(STEGO_PACKET_PREFIX)) return null
+    try {
+        const parsed = JSON.parse(raw.slice(STEGO_PACKET_PREFIX.length))
+        const previewImage = isDataImageUrl(parsed?.p) ? parsed.p : ""
+        const hiddenImage = isDataImageUrl(parsed?.h) ? parsed.h : ""
+        const secretText = typeof parsed?.t === "string" ? parsed.t : ""
+        if (!previewImage) return null
+        return { previewImage, hiddenImage, secretText }
+    } catch {
+        return null
+    }
+}
+
+/**
+ * @param {{ file: File, recipientCount: number, previewImage?: string, noticeText?: string }} packet
+ */
+function buildFilePacket(packet) {
+    const payload = {
+        v: 1,
+        n: packet.file?.name || "file",
+        s: Number.isFinite(packet.file?.size) ? Math.max(0, Number(packet.file.size)) : 0,
+        m: packet.file?.type || "application/octet-stream",
+        r: Math.max(1, Number(packet.recipientCount) || 1),
+        p: packet.previewImage || "",
+        t: packet.noticeText || "",
+        c: Date.now(),
+    }
+    return `${FILE_PACKET_PREFIX}${JSON.stringify(payload)}`
+}
+
+/**
+ * @param {unknown} raw
+ */
+function parseLegacyFileNotice(raw) {
+    if (typeof raw !== "string") return null
+    const trimmed = raw.trim()
+    const match = trimmed.match(/^\[file sent:\s*(.+?)\s*to\s*(\d+)\s*recipient(?:s)?\]$/i)
+    if (!match) return null
+    const filename = match[1]?.trim()
+    if (!filename) return null
+    const recipientCount = Math.max(1, Number.parseInt(match[2] || "1", 10) || 1)
+    return {
+        filename,
+        fileSize: 0,
+        fileType: "application/octet-stream",
+        recipientCount,
+        previewImage: "",
+        noticeText: "",
+    }
+}
+
+/**
+ * @param {unknown} raw
+ */
+function parseFilePacket(raw) {
+    if (typeof raw !== "string" || !raw.startsWith(FILE_PACKET_PREFIX)) return null
+    try {
+        const parsed = JSON.parse(raw.slice(FILE_PACKET_PREFIX.length))
+        const filename = typeof parsed?.n === "string" ? parsed.n.trim() : ""
+        if (!filename) return null
+        const fileSize = Number.isFinite(parsed?.s) ? Math.max(0, Number(parsed.s)) : 0
+        const fileType = typeof parsed?.m === "string" && parsed.m ? parsed.m : "application/octet-stream"
+        const recipientCount = Number.isFinite(parsed?.r) ? Math.max(1, Math.floor(Number(parsed.r))) : 1
+        const previewImage = isDataImageUrl(parsed?.p) ? parsed.p : ""
+        const noticeText = typeof parsed?.t === "string" ? parsed.t : ""
+
+        return {
+            filename,
+            fileSize,
+            fileType,
+            recipientCount,
+            previewImage,
+            noticeText,
+        }
+    } catch {
+        return null
+    }
+}
+
+let _messageDustRenderer = null
+async function loadMessageDustRenderer() {
+    if (_messageDustRenderer) return _messageDustRenderer
+    try {
+        const mod = await import("html2canvas-pro")
+        if (typeof mod?.default === "function") {
+            _messageDustRenderer = mod.default
+            return _messageDustRenderer
+        }
+    } catch {
+        // Fall through to html2canvas.
+    }
+    const fallback = await import("html2canvas")
+    _messageDustRenderer = fallback.default
+    return _messageDustRenderer
+}
+
+/**
+ * @param {number} peak
+ * @param {number} layerCount
+ */
+function messageDustWeightedIndex(peak, layerCount) {
+    const safeCount = Math.max(1, layerCount | 0)
+    const safePeak = Math.max(0, Math.min(safeCount - 1, peak | 0))
+
+    let total = 0
+    const probabilities = new Array(safeCount)
+    for (let i = 0; i < safeCount; i += 1) {
+        const weight = Math.pow(safeCount - Math.abs(safePeak - i), 3)
+        probabilities[i] = weight
+        total += weight
+    }
+
+    let draw = Math.random() * total
+    for (let i = 0; i < safeCount; i += 1) {
+        draw -= probabilities[i]
+        if (draw <= 0) return i
+    }
+    return safeCount - 1
+}
+
+/**
+ * @param {Uint8ClampedArray} pixelArray
+ * @param {number} width
+ * @param {number} height
+ */
+function createMessageDustCanvas(pixelArray, width, height) {
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")
+    if (ctx) {
+        const imageData = ctx.createImageData(width, height)
+        imageData.data.set(pixelArray)
+        ctx.putImageData(imageData, 0, 0)
+    }
+    return canvas
+}
+
+/**
+ * @param {HTMLElement | null} target
+ * @param {{ reduced?: boolean }} [options]
+ */
+async function disintegrateMessageElement(target, options = {}) {
+    if (!(target instanceof HTMLElement)) return
+
+    const reduced = options.reduced === true
+    const rect = target.getBoundingClientRect()
+    if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width < 2 || rect.height < 2) {
+        return
+    }
+
+    let renderer
+    try {
+        renderer = await loadMessageDustRenderer()
+    } catch {
+        return
+    }
+
+    let snapshot
+    try {
+        snapshot = await renderer(target, {
+            backgroundColor: null,
+            scale: 0.8,
+            useCORS: true,
+            logging: false,
+            removeContainer: true,
+            scrollX: 0,
+            scrollY: 0,
+            windowWidth: window.innerWidth,
+            windowHeight: window.innerHeight,
+        })
+    } catch {
+        return
+    }
+
+    const ctx = snapshot.getContext("2d")
+    if (!ctx) return
+
+    let imageData
+    try {
+        imageData = ctx.getImageData(0, 0, snapshot.width, snapshot.height)
+    } catch {
+        return
+    }
+
+    const pixels = imageData.data
+    const width = snapshot.width
+    const height = snapshot.height
+    const layerCount = reduced ? 6 : 10
+    const layers = Array.from({ length: layerCount }, () => new Uint8ClampedArray(pixels.length))
+
+    for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i + 3] < 8) continue
+        const pixelIndex = (i / 4) | 0
+        const y = (pixelIndex / width) | 0
+        const peak = Math.floor((y / Math.max(1, height)) * layerCount)
+        const layer = messageDustWeightedIndex(peak, layerCount)
+        layers[layer][i] = pixels[i]
+        layers[layer][i + 1] = pixels[i + 1]
+        layers[layer][i + 2] = pixels[i + 2]
+        layers[layer][i + 3] = pixels[i + 3]
+    }
+
+    const overlay = document.createElement("div")
+    overlay.className = "message-dust-overlay"
+    overlay.style.left = `${rect.left}px`
+    overlay.style.top = `${rect.top}px`
+    overlay.style.width = `${rect.width}px`
+    overlay.style.height = `${rect.height}px`
+    document.body.appendChild(overlay)
+
+    const dustCanvases = []
+    for (let i = 0; i < layerCount; i += 1) {
+        const canvas = createMessageDustCanvas(layers[i], width, height)
+        canvas.classList.add("message-dust-canvas")
+        canvas.style.width = `${rect.width}px`
+        canvas.style.height = `${rect.height}px`
+        overlay.appendChild(canvas)
+        dustCanvases.push(canvas)
+    }
+
+    target.classList.add("nuke-dissolving")
+    try {
+        const animations = dustCanvases.map((canvas, index) => {
+            const driftX = (30 + Math.random() * 90) * (Math.random() < 0.4 ? -1 : 1)
+            const driftY = -(20 + Math.random() * 80)
+            const rotation = (Math.random() - 0.5) * 24
+            const delay = index * (reduced ? 18 : 26)
+            const duration = (reduced ? 520 : 680) + index * (reduced ? 14 : 20)
+            const animation = canvas.animate(
+                [
+                    { transform: "translate3d(0, 0, 0) rotate(0deg)", opacity: 1, filter: "blur(0px)" },
+                    { transform: `translate3d(${driftX}px, ${driftY}px, 0) rotate(${rotation}deg)`, opacity: 0, filter: "blur(1.4px)" },
+                ],
+                {
+                    delay,
+                    duration,
+                    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+                    fill: "forwards",
+                },
+            )
+            return animation.finished.catch(() => undefined)
+        })
+        await Promise.allSettled(animations)
+    } finally {
+        overlay.remove()
+        target.classList.remove("nuke-dissolving")
+    }
 }
 
 /**
@@ -161,14 +697,44 @@ function AudioBubble({ src, isOwn }) {
     )
 }
 
-function MessageRow({ index, style, messages, username, onVanish }) {
+function MessageRow({ index, style, messages, username, onVanish, reducedMotion = false }) {
     const msg = messages?.[index]
     const vanishDuration = msg?.vanishAfter ? Number(msg.vanishAfter) : 0
     const [vanishRemaining, setVanishRemaining] = useState(null)
     const [isVanished, setIsVanished] = useState(false)
-    const [stegoRevealed, setStegoRevealed] = useState(false)
-    const [stegoText, setStegoText] = useState(null)
-    const [stegoDecoding, setStegoDecoding] = useState(false)
+    const [isDissolving, setIsDissolving] = useState(false)
+    const [showStegoRevealModal, setShowStegoRevealModal] = useState(false)
+    const [showFilePreviewModal, setShowFilePreviewModal] = useState(false)
+    const rowVisualRef = useRef(null)
+    const vanishStartedRef = useRef(false)
+    const stegoPacket = useMemo(() => parseStegoPacket(msg?.text), [msg?.text])
+    const filePacket = useMemo(() => parseFilePacket(msg?.text) || parseLegacyFileNotice(msg?.text), [msg?.text])
+
+    useEffect(() => {
+        setIsVanished(false)
+        setIsDissolving(false)
+        setShowStegoRevealModal(false)
+        setShowFilePreviewModal(false)
+        setVanishRemaining(null)
+        vanishStartedRef.current = false
+    }, [msg?.id])
+
+    const runTimedVanish = useCallback(async () => {
+        if (!msg?.id || vanishStartedRef.current) return
+        vanishStartedRef.current = true
+        setVanishRemaining(0)
+        setIsDissolving(true)
+
+        try {
+            await disintegrateMessageElement(rowVisualRef.current, { reduced: reducedMotion })
+        } catch {
+            // Fall back to immediate remove if dissolve animation fails.
+        } finally {
+            setIsDissolving(false)
+            setIsVanished(true)
+            onVanish?.(msg.id)
+        }
+    }, [msg?.id, onVanish, reducedMotion])
 
     // Start vanish countdown based on message timestamp (survives react-window re-mounts)
     useEffect(() => {
@@ -176,47 +742,46 @@ function MessageRow({ index, style, messages, username, onVanish }) {
 
         const msgTime = typeof msg.timestamp === "number" ? msg.timestamp : new Date(msg.timestamp).getTime()
         const expiresAt = msgTime + vanishDuration * 1000
+        let interval = /** @type {ReturnType<typeof setInterval> | null} */ (null)
 
         const tick = () => {
             const remaining = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000))
             setVanishRemaining(remaining)
             if (remaining <= 0) {
-                clearInterval(interval)
-                setIsVanished(true)
-                setTimeout(() => onVanish?.(msg.id), 600)
+                if (interval) clearInterval(interval)
+                void runTimedVanish()
             }
         }
 
         tick() // immediate first tick
-        const interval = setInterval(tick, 1000)
-        return () => clearInterval(interval)
-    }, [vanishDuration, msg?.timestamp, msg?.id, onVanish])
+        interval = setInterval(tick, 1000)
+        return () => {
+            if (interval) clearInterval(interval)
+        }
+    }, [msg?.timestamp, runTimedVanish, vanishDuration])
 
     if (!msg || isVanished) return <div style={style} />
 
     const isOwn = msg.sender === username
     const isStegoMsg = msg.type === "stego"
+    const isFileMsg = msg.type === "file" || Boolean(filePacket)
     const isAudioMsg = msg.type === "audio"
-
-    const handleReveal = async () => {
-        if (stegoDecoding) return
-        setStegoDecoding(true)
-        try {
-            const { decodeMessage } = await import("@/lib/stego")
-            const hidden = await decodeMessage(msg.text)
-            setStegoText(hidden || "(no hidden message found)")
-            setStegoRevealed(true)
-        } catch {
-            setStegoText("Failed to decode")
-            setStegoRevealed(true)
-        } finally {
-            setStegoDecoding(false)
-        }
-    }
+    const stegoPreviewImage = stegoPacket?.previewImage || ""
+    const stegoHiddenImage = stegoPacket?.hiddenImage || ""
+    const stegoHiddenText = stegoPacket?.secretText || ""
+    const hasStegoHiddenPayload = Boolean(stegoHiddenImage || stegoHiddenText)
+    const messageTimestamp = typeof msg.timestamp === "number" ? msg.timestamp : new Date(msg.timestamp).getTime()
+    const isFreshMessage = Number.isFinite(messageTimestamp) && (Date.now() - messageTimestamp) < 2200
 
     return (
-        <div style={{ ...style, transition: isVanished ? "opacity 0.5s" : undefined, opacity: isVanished ? 0 : 1 }}>
-            <div className={`flex px-3 sm:px-4 py-1.5 ${isOwn ? "justify-end pr-4 sm:pr-6" : "justify-start"}`}>
+        <div style={style}>
+            <motion.div
+                ref={rowVisualRef}
+                className={`flex px-3 sm:px-4 py-1.5 ${isOwn ? "justify-end pr-4 sm:pr-6" : "justify-start"} ${isDissolving ? "pointer-events-none" : ""}`}
+                initial={isFreshMessage ? { opacity: 0, y: 12, scale: 0.985, filter: "blur(2px)" } : false}
+                animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+                transition={{ duration: isFreshMessage ? 0.28 : 0.16, ease }}
+            >
                 <div className={`max-w-[88%] sm:max-w-[75%] ${isOwn ? "items-end" : "items-start"}`}>
                     <div className={`flex items-baseline gap-3 mb-1 ${isOwn ? "flex-row-reverse" : ""}`}>
                         <span className={`text-[10px] font-bold uppercase tracking-wider ${isOwn ? "text-green-500" : "text-teal-400"}`}>
@@ -230,41 +795,168 @@ function MessageRow({ index, style, messages, username, onVanish }) {
                         )}
                     </div>
                     {isStegoMsg ? (
-                        /* Stego message: image + reveal */
-                        <div className={`rounded-sm border overflow-hidden ${isOwn ? "border-green-900/30" : "border-zinc-700/30"}`}>
-                            <img
-                                src={msg.text}
-                                alt="Image"
-                                className="max-w-full max-h-[300px] object-contain bg-black"
-                                loading="lazy"
-                            />
-                            <div className="px-3 py-2 bg-zinc-900/50">
-                                {stegoRevealed ? (
-                                    <div className="space-y-1">
-                                        <p className="text-[9px] text-purple-400 font-bold uppercase tracking-wider">
-                                            {stegoText?.startsWith("data:image/") ? "Hidden Image" : "Hidden Message"}
-                                        </p>
-                                        {stegoText?.startsWith("data:image/") ? (
-                                            <img
-                                                src={stegoText}
-                                                alt="Hidden"
-                                                className="max-w-full max-h-[300px] object-contain rounded-sm border border-purple-900/30"
-                                            />
-                                        ) : (
-                                            <p className="text-sm text-zinc-200 font-mono break-all">{stegoText}</p>
-                                        )}
-                                    </div>
-                                ) : (
+                        <>
+                            {/* Hidden payload card: preview image + reveal modal trigger */}
+                            <div className={`message-card rounded-sm border overflow-hidden ${isOwn ? "border-green-900/30" : "border-zinc-700/30"}`}>
+                                {stegoPreviewImage ? (
                                     <button
-                                        onClick={handleReveal}
-                                        disabled={stegoDecoding}
-                                        className="text-[10px] font-bold uppercase tracking-wider text-purple-400 hover:text-purple-300 transition-colors cursor-pointer disabled:opacity-50"
+                                        type="button"
+                                        onClick={() => {
+                                            if (hasStegoHiddenPayload) setShowStegoRevealModal(true)
+                                        }}
+                                        disabled={!hasStegoHiddenPayload}
+                                        className={`w-full block border-0 p-0 bg-transparent ${hasStegoHiddenPayload ? "cursor-pointer" : "cursor-default"}`}
                                     >
-                                        {stegoDecoding ? "Decoding..." : "Reveal 🔍"}
+                                        <img
+                                            src={stegoPreviewImage}
+                                            alt="Preview"
+                                            className="media-preview max-w-full max-h-[300px] w-full object-contain bg-black"
+                                            loading="lazy"
+                                        />
                                     </button>
+                                ) : (
+                                    <div className="px-3 py-4 text-[10px] text-zinc-500 font-bold uppercase tracking-wider bg-black">
+                                        Invalid preview image payload
+                                    </div>
                                 )}
                             </div>
-                        </div>
+
+                            <AnimatePresence>
+                                {showStegoRevealModal && hasStegoHiddenPayload && (
+                                    <motion.div
+                                        className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-sm flex items-center justify-center px-4"
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        onClick={() => setShowStegoRevealModal(false)}
+                                    >
+                                        <motion.div
+                                            className="w-full max-w-lg max-h-[86vh] overflow-hidden rounded-sm border border-purple-700/50 bg-zinc-950 shadow-2xl"
+                                            initial={{ scale: 0.94, opacity: 0, y: 12 }}
+                                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                                            exit={{ scale: 0.96, opacity: 0, y: 10 }}
+                                            transition={{ type: "spring", stiffness: 320, damping: 26 }}
+                                            onClick={(event) => event.stopPropagation()}
+                                        >
+                                            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+                                                <p className="text-xs font-bold uppercase tracking-wider text-purple-300">Hidden Payload</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowStegoRevealModal(false)}
+                                                    className="text-zinc-500 hover:text-zinc-200 text-sm font-bold cursor-pointer"
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                            <div className="p-4 space-y-3 overflow-y-auto max-h-[70vh] custom-scrollbar">
+                                                {stegoHiddenText ? (
+                                                    <div className="rounded-sm border border-zinc-700/60 bg-zinc-900/50 p-3">
+                                                        <p className="text-[9px] text-purple-300 font-bold uppercase tracking-wider mb-1">Hidden Message</p>
+                                                        <p className="text-sm text-zinc-200 font-mono whitespace-pre-wrap break-words">{stegoHiddenText}</p>
+                                                    </div>
+                                                ) : null}
+                                                {stegoHiddenImage ? (
+                                                    <div className="rounded-sm border border-zinc-700/60 bg-zinc-900/40 p-2">
+                                                        <p className="text-[9px] text-purple-300 font-bold uppercase tracking-wider px-1 pt-1">Hidden Image</p>
+                                                        <img
+                                                            src={stegoHiddenImage}
+                                                            alt="Hidden"
+                                                            className="max-w-full max-h-[62vh] w-full object-contain rounded-sm border border-purple-900/40 bg-black mt-1"
+                                                        />
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        </motion.div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </>
+                    ) : isFileMsg ? (
+                        filePacket ? (
+                            <>
+                                <div className={`message-card rounded-sm border overflow-hidden ${isOwn ? "border-green-900/30 bg-green-950/10" : "border-zinc-700/30 bg-zinc-900/30"}`}>
+                                    {filePacket.previewImage ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowFilePreviewModal(true)}
+                                            className="w-full block border-0 p-0 bg-transparent cursor-zoom-in"
+                                        >
+                                            <img
+                                                src={filePacket.previewImage}
+                                                alt={filePacket.filename}
+                                                className="media-preview max-w-full max-h-[320px] w-full object-contain bg-black"
+                                                loading="lazy"
+                                            />
+                                        </button>
+                                    ) : (
+                                        <div className="px-3 py-3 flex items-start gap-3">
+                                            <div className="w-10 h-10 rounded-sm border border-zinc-700/60 bg-zinc-900 flex items-center justify-center text-lg">
+                                                📄
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-bold text-zinc-200 truncate">{filePacket.filename}</p>
+                                                <p className="text-[10px] text-zinc-500 uppercase tracking-wider">
+                                                    {formatFileSize(filePacket.fileSize)} • {formatFileTypeLabel(filePacket.fileType)}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div className="px-3 py-2 bg-zinc-900/60 border-t border-zinc-700/30">
+                                        <p className="text-xs font-mono text-zinc-300 truncate">{filePacket.filename}</p>
+                                        <p className="text-[10px] text-zinc-500">
+                                            {formatFileSize(filePacket.fileSize)} • shared with {filePacket.recipientCount} recipient{filePacket.recipientCount === 1 ? "" : "s"}
+                                        </p>
+                                        {filePacket.noticeText ? (
+                                            <p className="text-[10px] text-zinc-500 mt-1 truncate">{filePacket.noticeText}</p>
+                                        ) : null}
+                                    </div>
+                                </div>
+
+                                <AnimatePresence>
+                                    {showFilePreviewModal && filePacket.previewImage && (
+                                        <motion.div
+                                            className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-sm flex items-center justify-center px-4"
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            exit={{ opacity: 0 }}
+                                            onClick={() => setShowFilePreviewModal(false)}
+                                        >
+                                            <motion.div
+                                                className="w-full max-w-5xl rounded-sm border border-zinc-700/70 bg-black p-3"
+                                                initial={{ scale: 0.96, opacity: 0, y: 12 }}
+                                                animate={{ scale: 1, opacity: 1, y: 0 }}
+                                                exit={{ scale: 0.98, opacity: 0, y: 8 }}
+                                                transition={{ type: "spring", stiffness: 300, damping: 26 }}
+                                                onClick={(event) => event.stopPropagation()}
+                                            >
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <p className="text-xs font-mono text-zinc-300 truncate pr-2">{filePacket.filename}</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowFilePreviewModal(false)}
+                                                        className="text-zinc-500 hover:text-zinc-200 text-sm font-bold cursor-pointer"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                                <img
+                                                    src={filePacket.previewImage}
+                                                    alt={filePacket.filename}
+                                                    className="w-full max-h-[78vh] object-contain rounded-sm border border-zinc-800/70 bg-black"
+                                                />
+                                            </motion.div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </>
+                        ) : (
+                            <div className={`message-bubble px-3.5 py-2.5 rounded-sm text-sm leading-relaxed break-all border ${isOwn
+                                ? "bg-green-950/20 border-green-900/30 text-zinc-200"
+                                : "bg-zinc-800/30 border-zinc-700/30 text-zinc-300"
+                                }`}>
+                                {msg.text}
+                            </div>
+                        )
                     ) : isAudioMsg ? (
                         /* Audio message: voice note player */
                         <AudioBubble src={msg.text} isOwn={isOwn} />
@@ -278,7 +970,7 @@ function MessageRow({ index, style, messages, username, onVanish }) {
                         </div>
                     )}
                 </div>
-            </div>
+            </motion.div>
         </div>
     )
 }
@@ -304,8 +996,11 @@ const Page = () => {
     const expiredFromServerRef = useRef(false)
     const copyResetTimeoutRef = useRef(null)
     const sendFxTimeoutRef = useRef(null)
-    const [sendFxId, setSendFxId] = useState(0)
+    const sendFxRunIdRef = useRef(0)
     const [isSendFxActive, setIsSendFxActive] = useState(false)
+    const sendPlaneControls = useAnimationControls()
+    const sendTrailControls = useAnimationControls()
+    const sendWindControls = useAnimationControls()
     const isDestroyingRef = useRef(false)
     const [userRole, setUserRole] = useState(null) // "creator" | "member"
     const [showDestroyRequest, setShowDestroyRequest] = useState(false)
@@ -314,25 +1009,28 @@ const Page = () => {
     const [showExtendPopover, setShowExtendPopover] = useState(false)
     const [showPanicModal, setShowPanicModal] = useState(false)
     const [panicInput, setPanicInput] = useState("")
+    const [hasPanicPassword, setHasPanicPassword] = useState(false)
+    const [panicShortcut, setPanicShortcut] = useState("")
+    const [panicShortcutPassword, setPanicShortcutPassword] = useState("")
+    const [isRecordingPanicShortcut, setIsRecordingPanicShortcut] = useState(false)
     const [showFileSendModal, setShowFileSendModal] = useState(false)
+    const [queuedDroppedFile, setQueuedDroppedFile] = useState(/** @type {File | null} */(null))
+    const [isRoomDragActive, setIsRoomDragActive] = useState(false)
     const [transferState, setTransferState] = useState({ status: "idle", progress: 0, filename: "", direction: "" })
     // Vanish timer state
     const [vanishAfter, setVanishAfter] = useState(0) // 0 = off, else seconds
     const [showVanishPicker, setShowVanishPicker] = useState(false)
     const [showInputMenu, setShowInputMenu] = useState(false)
-    const VANISH_OPTIONS = [0, 5, 10, 30, 60, 300]
     // Stego modal state
     const [showStegoModal, setShowStegoModal] = useState(false)
-    const [stegoImage, setStegoImage] = useState(null) // preview URL (blob/data URL)
+    const [stegoImage, setStegoImage] = useState(null) // preview image (data URL)
     const [stegoSecret, setStegoSecret] = useState("")
+    const [stegoSecretImage, setStegoSecretImage] = useState(null) // hidden image (data URL)
     const [stegoEncoding, setStegoEncoding] = useState(false)
+    const [stegoPreviewDragActive, setStegoPreviewDragActive] = useState(false)
+    const [stegoHiddenDragActive, setStegoHiddenDragActive] = useState(false)
     const stegoFileRef = useRef(null)
-    const stegoObjectUrlRef = useRef("")
-    const [stegoMode, setStegoMode] = useState("text") // "text" | "image"
-    const [stegoSecretImage, setStegoSecretImage] = useState(null) // data URL of secret image
     const stegoSecretFileRef = useRef(null)
-    const stegoDecodeFileRef = useRef(null)
-    const [stegoDecodeResult, setStegoDecodeResult] = useState(null)
     // Audio recording state
     const [isRecording, setIsRecording] = useState(false)
     const [recordingDuration, setRecordingDuration] = useState(0)
@@ -346,9 +1044,16 @@ const Page = () => {
     const activeReceiversRef = useRef(new Map())
     const pendingOfferToastIdsRef = useRef(new Map())
     const cancelledOfferIdsRef = useRef(new Set())
+    const roomDropDepthRef = useRef(0)
     const trackedPermanentRoomRef = useRef("")
-    const requesterClientIdRef = useRef(`requester_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`)
-    const presenceClientIdRef = useRef(`presence_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`)
+    const requesterClientIdRef = useRef("")
+    if (!requesterClientIdRef.current) {
+        requesterClientIdRef.current = `requester_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+    }
+    const presenceClientIdRef = useRef("")
+    if (!presenceClientIdRef.current) {
+        presenceClientIdRef.current = `presence_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+    }
     const [presenceMap, setPresenceMap] = useState({})
     const [nukeState, setNukeState] = useState("idle")
     const nukeTargetPathRef = useRef("")
@@ -357,6 +1062,8 @@ const Page = () => {
     const nukeOriginRef = useRef(null)
     const secureSeenMessageIdsRef = useRef(new Set())
     const { reduced } = useNukeCapabilities()
+    const reducedMotion = useReducedMotion()
+    const shouldReduceMotion = reduced || reducedMotion
     const isNukeRunning = nukeState === "running"
 
     useEffect(() => {
@@ -395,8 +1102,10 @@ const Page = () => {
                 setIsSecureRoom(secure)
                 if (!secure) {
                     setSecureRoomKey("")
+                    setHasPanicPassword(Boolean(data?.hasPanicPassword))
                     return
                 }
+                setHasPanicPassword(false)
 
                 const roomKeyHex = readRoomKey(roomId)
                 if (!roomKeyHex) {
@@ -410,6 +1119,7 @@ const Page = () => {
             } catch {
                 setIsSecureRoom(false)
                 setSecureRoomKey("")
+                setHasPanicPassword(false)
             }
         }
 
@@ -428,6 +1138,71 @@ const Page = () => {
             fetchRole()
         }
     }, [roomId, router])
+
+    const persistPanicShortcutConfig = useCallback((combo, password) => {
+        if (typeof window === "undefined" || !roomId) return
+        const key = panicShortcutStorageKey(roomId)
+        if (!combo || !password) {
+            sessionStorage.removeItem(key)
+            return
+        }
+        sessionStorage.setItem(key, JSON.stringify({
+            combo,
+            panicPassword: password,
+        }))
+    }, [roomId])
+
+    useEffect(() => {
+        setIsRecordingPanicShortcut(false)
+
+        if (typeof window === "undefined" || !roomId || isSecureRoom) {
+            setPanicShortcut("")
+            setPanicShortcutPassword("")
+            return
+        }
+
+        try {
+            const key = panicShortcutStorageKey(roomId)
+            const raw = sessionStorage.getItem(key)
+            if (!raw) {
+                setPanicShortcut("")
+                setPanicShortcutPassword("")
+                return
+            }
+
+            const parsed = JSON.parse(raw)
+            const combo = typeof parsed?.combo === "string" ? parsed.combo : ""
+            const password = typeof parsed?.panicPassword === "string" ? parsed.panicPassword : ""
+            if (!combo || !password) {
+                sessionStorage.removeItem(key)
+                setPanicShortcut("")
+                setPanicShortcutPassword("")
+                return
+            }
+
+            setPanicShortcut(combo)
+            setPanicShortcutPassword(password)
+        } catch {
+            try {
+                sessionStorage.removeItem(panicShortcutStorageKey(roomId))
+            } catch {
+                // Ignore storage cleanup errors.
+            }
+            setPanicShortcut("")
+            setPanicShortcutPassword("")
+        }
+    }, [roomId, isSecureRoom])
+
+    const openPanicModal = useCallback(() => {
+        if (isSecureRoom) {
+            toast.error("Panic mode is unavailable in secure rooms", {
+                style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
+            })
+            return
+        }
+        setPanicInput((prev) => prev || panicShortcutPassword)
+        setShowPanicModal(true)
+    }, [isSecureRoom, panicShortcutPassword])
 
     useEffect(() => {
         if (endTimeRef.current === null) return
@@ -501,6 +1276,12 @@ const Page = () => {
                 sessionStorage.removeItem(secureEnvelopeCacheKey(roomId))
             }
         }
+        if (typeof window !== "undefined") {
+            sessionStorage.removeItem(panicShortcutStorageKey(roomId))
+        }
+        setPanicShortcut("")
+        setPanicShortcutPassword("")
+        setIsRecordingPanicShortcut(false)
         nukeRunningRef.current = false
         setNukeState("idle")
         nukeTargetPathRef.current = ""
@@ -526,10 +1307,7 @@ const Page = () => {
             activeSendersRef.current.clear()
             activeReceiversRef.current.clear()
             nukeRunningRef.current = false
-            if (stegoObjectUrlRef.current && typeof window !== "undefined") {
-                URL.revokeObjectURL(stegoObjectUrlRef.current)
-                stegoObjectUrlRef.current = ""
-            }
+            roomDropDepthRef.current = 0
         }
     }, [])
 
@@ -700,11 +1478,14 @@ const Page = () => {
 
     const messageParticipants = useMemo(() => {
         if (!currentMessages || currentMessages.length === 0) return []
-        const senders = new Set()
+        const senders = new Map()
         for (const m of /** @type {any[]} */ (currentMessages)) {
-            if (m?.sender) senders.add(m.sender)
+            const normalizedSender = normalizeParticipantName(m?.sender)
+            if (!normalizedSender) continue
+            const key = participantKey(normalizedSender)
+            if (!senders.has(key)) senders.set(key, normalizedSender)
         }
-        return Array.from(senders)
+        return Array.from(senders.values())
     }, [currentMessages])
 
     // Poll server for participants (reliable fallback for presence discovery)
@@ -723,17 +1504,25 @@ const Page = () => {
 
     // Merge message history + server poll + live presence so recipients are selectable immediately.
     const participants = useMemo(() => {
-        const merged = new Set(messageParticipants)
+        const merged = new Map()
+        const addParticipant = (value) => {
+            const normalized = normalizeParticipantName(value)
+            if (!normalized) return
+            const key = participantKey(normalized)
+            if (!merged.has(key)) merged.set(key, normalized)
+        }
+
+        for (const p of messageParticipants) addParticipant(p)
         if (serverParticipants) {
-            for (const p of serverParticipants) merged.add(p)
+            for (const p of serverParticipants) addParticipant(p)
         }
         const presenceEntries = Object.values(presenceMap)
         for (const entry of presenceEntries) {
-            if (entry?.username) merged.add(entry.username)
+            addParticipant(entry?.username)
         }
-        if (username) merged.add(username)
+        addParticipant(username)
 
-        return Array.from(merged).sort((a, b) => a.localeCompare(b))
+        return Array.from(merged.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
     }, [messageParticipants, serverParticipants, presenceMap, username])
 
     useRealtime({
@@ -825,10 +1614,26 @@ const Page = () => {
 
             if (evt === "presence.request") {
                 const requesterId = typeof d?.clientId === "string" ? d.clientId : ""
+                const requesterUsername = normalizeParticipantName(d?.username)
+                const seenAt = Date.now()
+                if (requesterId && requesterUsername) {
+                    setPresenceMap((prev) => {
+                        const current = prev[requesterId]
+                        if (
+                            current?.username === requesterUsername &&
+                            typeof current?.lastSeen === "number" &&
+                            seenAt - current.lastSeen < 1000
+                        ) return prev
+                        return {
+                            ...prev,
+                            [requesterId]: { username: requesterUsername, lastSeen: seenAt },
+                        }
+                    })
+                }
                 if (!username || !requesterId || requesterId === presenceClientIdRef.current) return
                 emitSignal("presence.announce", {
                     clientId: presenceClientIdRef.current,
-                    username,
+                    username: normalizeParticipantName(username),
                     timestamp: Date.now(),
                 })
                 return
@@ -836,9 +1641,10 @@ const Page = () => {
 
             if (evt === "presence.announce") {
                 const clientId = typeof d?.clientId === "string" ? d.clientId : ""
-                const announcedUsername = typeof d?.username === "string" ? d.username.trim() : ""
+                const announcedUsername = normalizeParticipantName(d?.username)
                 if (!clientId || !announcedUsername) return
-                const lastSeen = typeof d?.timestamp === "number" ? d.timestamp : Date.now()
+                // Use local receipt time; remote clocks can drift and cause false pruning.
+                const lastSeen = Date.now()
                 setPresenceMap((prev) => {
                     const current = prev[clientId]
                     if (
@@ -877,15 +1683,15 @@ const Page = () => {
                 if (d.to !== "everyone" && d.to !== username) return
                 if (cancelledOfferIdsRef.current.has(d.offerId)) return
 
-                const toastId = toast(
-                    (t) => (
+                const toastId = toast.custom(
+                    (toastCustomId) => (
                         <FileOfferToast
                             filename={d.filename}
                             fileSize={d.fileSize}
                             from={d.from}
                             onAccept={() => {
                                 pendingOfferToastIdsRef.current.delete(d.offerId)
-                                toast.dismiss(t.id)
+                                toast.dismiss(toastCustomId)
                                 if (cancelledOfferIdsRef.current.has(d.offerId)) {
                                     toast.error("Sender cancelled this transfer", {
                                         style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
@@ -896,7 +1702,7 @@ const Page = () => {
                             }}
                             onReject={() => {
                                 pendingOfferToastIdsRef.current.delete(d.offerId)
-                                toast.dismiss(t.id)
+                                toast.dismiss(toastCustomId)
                                 emitSignal("file.reject", {
                                     offerId: d.offerId,
                                     from: username,
@@ -1079,6 +1885,7 @@ const Page = () => {
             isDestroyingRef.current = true
             setShowPanicModal(false)
             setPanicInput("")
+            setIsRecordingPanicShortcut(false)
             await client.room.panic.post({ panicPassword }, { query: { roomId } })
         },
         onSuccess: () => {
@@ -1090,13 +1897,108 @@ const Page = () => {
             if (isSecureRoom) clearRoomKey(roomId)
             router.push("/?error=room-not-found")
         },
-        onError: () => {
+        onError: (error) => {
             isDestroyingRef.current = false
-            toast.error("Invalid panic password", {
+            const err = /** @type {any} */ (error)
+            const message = typeof err?.value?.error === "string"
+                ? err.value.error
+                : (typeof err?.message === "string" ? err.message : "Invalid panic password")
+            toast.error(message, {
                 style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
             })
         }
     })
+
+    const savePanicShortcut = useCallback(() => {
+        if (isSecureRoom) {
+            toast.error("Panic shortcuts are unavailable in secure rooms", {
+                style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
+            })
+            return
+        }
+        if (!hasPanicPassword) {
+            toast.error("This room has no panic password configured", {
+                style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
+            })
+            return
+        }
+        if (!panicShortcut) {
+            toast.error("Record a shortcut first", {
+                style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
+            })
+            return
+        }
+
+        const passwordToUse = panicInput.trim() || panicShortcutPassword.trim()
+        if (!passwordToUse) {
+            toast.error("Enter panic password to arm the shortcut", {
+                style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
+            })
+            return
+        }
+
+        setPanicShortcutPassword(passwordToUse)
+        setIsRecordingPanicShortcut(false)
+        persistPanicShortcutConfig(panicShortcut, passwordToUse)
+        toast.success(`Panic shortcut armed: ${panicShortcut}`, {
+            style: { background: "#18181b", color: "#86efac", border: "1px solid #14532d" },
+            duration: 2500,
+        })
+    }, [
+        hasPanicPassword,
+        isSecureRoom,
+        panicInput,
+        panicShortcut,
+        panicShortcutPassword,
+        persistPanicShortcutConfig,
+    ])
+
+    const clearPanicShortcut = useCallback(() => {
+        setPanicShortcut("")
+        setPanicShortcutPassword("")
+        setIsRecordingPanicShortcut(false)
+        persistPanicShortcutConfig("", "")
+        toast("Panic shortcut cleared", {
+            icon: "⌫",
+            style: { background: "#18181b", color: "#d4d4d8", border: "1px solid #3f3f46" },
+            duration: 2200,
+        })
+    }, [persistPanicShortcutConfig])
+
+    useEffect(() => {
+        const handleShortcutKeydown = (event) => {
+            const combo = shortcutFromEvent(event)
+            if (!combo) return
+
+            if (isRecordingPanicShortcut) {
+                event.preventDefault()
+                event.stopPropagation()
+                setPanicShortcut(combo)
+                setIsRecordingPanicShortcut(false)
+                return
+            }
+
+            if (isSecureRoom || !hasPanicPassword) return
+            if (!panicShortcut || !panicShortcutPassword) return
+            if (combo !== panicShortcut) return
+            if (isNukeRunning || isDestroyingRef.current) return
+
+            event.preventDefault()
+            event.stopPropagation()
+            triggerPanic(panicShortcutPassword)
+        }
+
+        window.addEventListener("keydown", handleShortcutKeydown, true)
+        return () => window.removeEventListener("keydown", handleShortcutKeydown, true)
+    }, [
+        hasPanicPassword,
+        isNukeRunning,
+        isRecordingPanicShortcut,
+        isSecureRoom,
+        panicShortcut,
+        panicShortcutPassword,
+        triggerPanic,
+    ])
 
     const { mutate: leaveRoom, isPending: isLeavingRoom } = useMutation({
         mutationFn: async () => {
@@ -1146,27 +2048,28 @@ const Page = () => {
     }, [])
 
     useEffect(() => {
-        if (!roomId || !username) return
+        const ownUsername = normalizeParticipantName(username)
+        if (!roomId || !ownUsername) return
 
         const clientId = presenceClientIdRef.current
         const announce = () => {
             emitSignal("presence.announce", {
                 clientId,
-                username,
+                username: ownUsername,
                 timestamp: Date.now(),
             })
         }
         const requestSync = () => {
             emitSignal("presence.request", {
                 clientId,
-                username,
+                username: ownUsername,
                 timestamp: Date.now(),
             })
         }
 
         setPresenceMap((prev) => ({
             ...prev,
-            [clientId]: { username, lastSeen: Date.now() },
+            [clientId]: { username: ownUsername, lastSeen: Date.now() },
         }))
 
         announce()
@@ -1175,8 +2078,10 @@ const Page = () => {
         // Retry presence discovery for late joiners (realtime subscription may not be ready yet)
         const retry1 = setTimeout(requestSync, 1000)
         const retry2 = setTimeout(requestSync, 3000)
+        const retry3 = setTimeout(requestSync, 6000)
 
         const heartbeatTimer = setInterval(announce, PRESENCE_HEARTBEAT_MS)
+        const resyncTimer = setInterval(requestSync, 15_000)
         const pruneTimer = setInterval(() => {
             const cutoff = Date.now() - PRESENCE_TTL_MS
             setPresenceMap((prev) => {
@@ -1200,7 +2105,7 @@ const Page = () => {
                 const payload = JSON.stringify({
                     channel: roomId,
                     event: "presence.leave",
-                    data: { clientId, username, timestamp: Date.now() },
+                    data: { clientId, username: ownUsername, timestamp: Date.now() },
                 })
                 navigator.sendBeacon("/api/realtime/emit", new Blob([payload], { type: "application/json" }))
             } catch {
@@ -1212,12 +2117,14 @@ const Page = () => {
         return () => {
             clearTimeout(retry1)
             clearTimeout(retry2)
+            clearTimeout(retry3)
             clearInterval(heartbeatTimer)
+            clearInterval(resyncTimer)
             clearInterval(pruneTimer)
             window.removeEventListener("beforeunload", onBeforeUnload)
             emitSignal("presence.leave", {
                 clientId,
-                username,
+                username: ownUsername,
                 timestamp: Date.now(),
             })
             setPresenceMap((prev) => {
@@ -1230,8 +2137,22 @@ const Page = () => {
     }, [emitSignal, roomId, username])
 
     /** Send a file to selected peers via WebRTC */
-    const handleSendFile = useCallback(async (/** @type {File} */ file, /** @type {string[]} */ targets) => {
-        const uniqueTargets = Array.from(new Set((targets || []).filter((target) => target && target !== username)))
+    const handleSendFile = useCallback(async (
+        /** @type {File} */ file,
+        /** @type {string[]} */ targets,
+        /** @type {{ announceInChat?: boolean, noticeText?: string, vanishSeconds?: number } | undefined} */ options = undefined,
+    ) => {
+        const ownParticipant = participantKey(username || "")
+        const uniqueTargets = []
+        const seenTargets = new Set()
+        for (const rawTarget of targets || []) {
+            const normalizedTarget = normalizeParticipantName(rawTarget)
+            if (!normalizedTarget) continue
+            const targetKey = participantKey(normalizedTarget)
+            if (!targetKey || targetKey === ownParticipant || seenTargets.has(targetKey)) continue
+            seenTargets.add(targetKey)
+            uniqueTargets.push(normalizedTarget)
+        }
         if (uniqueTargets.length === 0) {
             toast.error("No recipients selected", {
                 style: { background: "#18181b", color: "#fca5a5", border: "1px solid #7f1d1d" },
@@ -1244,6 +2165,35 @@ const Page = () => {
             style: { background: "#18181b", color: "#86efac", border: "1px solid #14532d" },
             duration: 2500,
         })
+
+        if (options?.announceInChat !== false) {
+            const recipientCount = uniqueTargets.length
+            const chatNotice = typeof options?.noticeText === "string" && options.noticeText.trim()
+                ? options.noticeText.trim()
+                : `[file sent: ${file.name} to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}]`
+            const vanishSeconds = typeof options?.vanishSeconds === "number"
+                ? options.vanishSeconds
+                : vanishAfter
+            let previewImage = ""
+            if (file.type.startsWith("image/")) {
+                try {
+                    previewImage = await buildImagePreviewDataUrl(file)
+                } catch {
+                    previewImage = ""
+                }
+            }
+
+            mutate({
+                text: buildFilePacket({
+                    file,
+                    recipientCount,
+                    previewImage,
+                    noticeText: chatNotice,
+                }),
+                type: "file",
+                ...(vanishSeconds > 0 ? { vanishAfter: vanishSeconds } : {}),
+            })
+        }
 
         for (const target of uniqueTargets) {
             const sender = new FileSender({ file, roomId, username, to: target, emitSignal })
@@ -1295,7 +2245,64 @@ const Page = () => {
             // Step 1: Send metadata offer only — connection starts on receiver acceptance
             await sender.sendOffer()
         }
-    }, [roomId, username, emitSignal])
+    }, [emitSignal, mutate, roomId, username, vanishAfter])
+
+    const hasDraggedFiles = useCallback((event) => {
+        const types = event?.dataTransfer?.types
+        if (!types) return false
+        return Array.from(types).includes("Files")
+    }, [])
+
+    const handleRoomDragEnter = useCallback((event) => {
+        if (showStegoModal || showFileSendModal || !hasDraggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        roomDropDepthRef.current += 1
+        setIsRoomDragActive(true)
+    }, [hasDraggedFiles, showFileSendModal, showStegoModal])
+
+    const handleRoomDragOver = useCallback((event) => {
+        if (showStegoModal || showFileSendModal || !hasDraggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        event.dataTransfer.dropEffect = "copy"
+        setIsRoomDragActive(true)
+    }, [hasDraggedFiles, showFileSendModal, showStegoModal])
+
+    const handleRoomDragLeave = useCallback((event) => {
+        if (!hasDraggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        roomDropDepthRef.current = Math.max(0, roomDropDepthRef.current - 1)
+        if (roomDropDepthRef.current === 0) {
+            setIsRoomDragActive(false)
+        }
+    }, [hasDraggedFiles])
+
+    const handleRoomDrop = useCallback((event) => {
+        if (showStegoModal || showFileSendModal || !hasDraggedFiles(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        roomDropDepthRef.current = 0
+        setIsRoomDragActive(false)
+        const file = event.dataTransfer?.files?.[0]
+        if (!file) return
+        setQueuedDroppedFile(file)
+        setShowFileSendModal(true)
+    }, [hasDraggedFiles, showFileSendModal, showStegoModal])
+
+    useEffect(() => {
+        const resetRoomDragState = () => {
+            roomDropDepthRef.current = 0
+            setIsRoomDragActive(false)
+        }
+        window.addEventListener("dragend", resetRoomDragState)
+        window.addEventListener("drop", resetRoomDragState)
+        return () => {
+            window.removeEventListener("dragend", resetRoomDragState)
+            window.removeEventListener("drop", resetRoomDragState)
+        }
+    }, [])
 
     /** Accept an incoming file offer */
     const handleAcceptFile = useCallback(async (/** @type {any} */ offer) => {
@@ -1374,17 +2381,86 @@ const Page = () => {
         }, 3000)
     }
 
+    const resetSendFxControls = useCallback(() => {
+        sendPlaneControls.set(SEND_PLANE_REST_ANIMATION)
+        sendTrailControls.set(SEND_TRAIL_REST_ANIMATION)
+        sendWindControls.set(SEND_WIND_REST_ANIMATION)
+    }, [sendPlaneControls, sendTrailControls, sendWindControls])
+
+    useEffect(() => {
+        resetSendFxControls()
+    }, [resetSendFxControls])
+
+    const triggerSendFx = useCallback(async () => {
+        const runId = ++sendFxRunIdRef.current
+        if (sendFxTimeoutRef.current) {
+            clearTimeout(sendFxTimeoutRef.current)
+            sendFxTimeoutRef.current = null
+        }
+
+        sendPlaneControls.stop()
+        sendTrailControls.stop()
+        sendWindControls.stop()
+        resetSendFxControls()
+        setIsSendFxActive(true)
+
+        sendFxTimeoutRef.current = setTimeout(() => {
+            if (sendFxRunIdRef.current !== runId) return
+            setIsSendFxActive(false)
+            resetSendFxControls()
+        }, SEND_FX_ACTIVE_MS)
+
+        try {
+            if (shouldReduceMotion) {
+                await sendPlaneControls.start({
+                    scale: [1, 0.97, 1],
+                    opacity: [1, 0.84, 1],
+                    transition: { duration: DUR_BASE, ease },
+                })
+            } else {
+                await Promise.all([
+                    sendPlaneControls.start({
+                        ...SEND_PLANE_LAUNCH_ANIMATION,
+                        transition: SEND_PLANE_LAUNCH_TRANSITION,
+                    }),
+                    sendTrailControls.start({
+                        ...SEND_TRAIL_LAUNCH_ANIMATION,
+                        transition: SEND_TRAIL_LAUNCH_TRANSITION,
+                    }),
+                    sendWindControls.start({
+                        ...SEND_WIND_LAUNCH_ANIMATION,
+                        transition: SEND_WIND_LAUNCH_TRANSITION,
+                    }),
+                ])
+
+                if (sendFxRunIdRef.current !== runId) return
+
+                sendTrailControls.set(SEND_TRAIL_REST_ANIMATION)
+                sendWindControls.set(SEND_WIND_REST_ANIMATION)
+                sendPlaneControls.set(SEND_PLANE_RETURN_START)
+
+                await sendPlaneControls.start({
+                    ...SEND_PLANE_RETURN_END,
+                    transition: SEND_PLANE_RETURN_TRANSITION,
+                })
+            }
+        } finally {
+            if (sendFxRunIdRef.current !== runId) return
+            if (sendFxTimeoutRef.current) {
+                clearTimeout(sendFxTimeoutRef.current)
+                sendFxTimeoutRef.current = null
+            }
+            setIsSendFxActive(false)
+            resetSendFxControls()
+        }
+    }, [resetSendFxControls, sendPlaneControls, sendTrailControls, sendWindControls, shouldReduceMotion])
+
     const sendMessage = () => {
         const text = input.trim()
         if (!text || !roomId) return
 
         mutate({ text, ...(vanishAfter > 0 ? { vanishAfter } : {}) })
-        setSendFxId((prev) => prev + 1)
-        setIsSendFxActive(true)
-        if (sendFxTimeoutRef.current) clearTimeout(sendFxTimeoutRef.current)
-        sendFxTimeoutRef.current = setTimeout(() => {
-            setIsSendFxActive(false)
-        }, 980)
+        void triggerSendFx()
         setInput("")
         inputRef.current?.focus()
     }
@@ -1435,10 +2511,7 @@ const Page = () => {
                     const dataUrl = /** @type {string} */ (reader.result)
                     if (dataUrl && typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
                         mutate({ text: dataUrl, type: "audio", ...(vanishAfter > 0 ? { vanishAfter } : {}) })
-                        setSendFxId((prev) => prev + 1)
-                        setIsSendFxActive(true)
-                        if (sendFxTimeoutRef.current) clearTimeout(sendFxTimeoutRef.current)
-                        sendFxTimeoutRef.current = setTimeout(() => setIsSendFxActive(false), 980)
+                        void triggerSendFx()
                     }
                     cleanupRecording()
                 }
@@ -1465,7 +2538,7 @@ const Page = () => {
             toast.error(message, { duration: 3000 })
             cleanupRecording()
         }
-    }, [cleanupRecording, mutate, vanishAfter])
+    }, [cleanupRecording, mutate, triggerSendFx, vanishAfter])
 
     const stopRecording = useCallback(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -1501,12 +2574,13 @@ const Page = () => {
     }, [])
 
     const clearStegoImage = useCallback(() => {
-        if (stegoObjectUrlRef.current && typeof window !== "undefined") {
-            URL.revokeObjectURL(stegoObjectUrlRef.current)
-            stegoObjectUrlRef.current = ""
-        }
         setStegoImage(null)
         if (stegoFileRef.current) stegoFileRef.current.value = ""
+    }, [])
+
+    const closeFileSendModal = useCallback(() => {
+        setShowFileSendModal(false)
+        setQueuedDroppedFile(null)
     }, [])
 
     const closeStegoModal = useCallback(() => {
@@ -1514,257 +2588,235 @@ const Page = () => {
         clearStegoImage()
         setStegoSecret("")
         setStegoSecretImage(null)
-        setStegoMode("text")
-        setStegoDecodeResult(null)
+        setStegoPreviewDragActive(false)
+        setStegoHiddenDragActive(false)
     }, [clearStegoImage])
 
-    // Compress secret image: resize to max 400px, JPEG 60%
-    const compressImage = useCallback((dataUrl) => {
-        return new Promise((resolve, reject) => {
-            const img = new Image()
-            img.onload = () => {
-                const maxDim = 400
-                let w = img.width, h = img.height
-                if (w > maxDim || h > maxDim) {
-                    if (w > h) { h = Math.round(h * maxDim / w); w = maxDim }
-                    else { w = Math.round(w * maxDim / h); h = maxDim }
-                }
-                const canvas = document.createElement("canvas")
-                canvas.width = w
-                canvas.height = h
-                const ctx = canvas.getContext("2d")
-                ctx.drawImage(img, 0, 0, w, h)
-                resolve(canvas.toDataURL("image/jpeg", 0.6))
-            }
-            img.onerror = () => reject(new Error("Failed to compress image"))
-            img.src = dataUrl
-        })
+    const encodeImageVariant = useCallback((img, scale, quality) => {
+        const sourceMax = Math.max(img.width, img.height)
+        const clampedScale = Number.isFinite(scale) ? Math.max(0.08, Math.min(1, scale)) : 1
+        const targetMax = Math.max(64, Math.round(sourceMax * clampedScale))
+        const resizeRatio = Math.min(1, targetMax / sourceMax)
+        const width = Math.max(1, Math.round(img.width * resizeRatio))
+        const height = Math.max(1, Math.round(img.height * resizeRatio))
+
+        const canvas = document.createElement("canvas")
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext("2d")
+        if (!ctx) throw new Error("Unable to initialize image compression canvas")
+
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = "high"
+        ctx.drawImage(img, 0, 0, width, height)
+
+        const normalizedQuality = Number.isFinite(quality) ? Math.max(0.2, Math.min(0.95, quality)) : 0.82
+        const out = canvas.toDataURL("image/jpeg", normalizedQuality)
+        canvas.width = 0
+        canvas.height = 0
+        return out
     }, [])
 
-    const blobToDataUrl = useCallback((blob) => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve(reader.result)
-            reader.onerror = () => reject(new Error("Failed to read image data"))
-            reader.readAsDataURL(blob)
-        })
+    const buildImageCandidates = useCallback(async (dataUrl, maxDimension = 1400) => {
+        const img = await loadPreviewImageElement(dataUrl)
+        const sourceMax = Math.max(img.width, img.height)
+        const baseScale = sourceMax > maxDimension ? (maxDimension / sourceMax) : 1
+        const variants = []
+        const seen = new Set()
+
+        const addCandidate = (candidate) => {
+            if (!candidate || seen.has(candidate)) return
+            seen.add(candidate)
+            variants.push(candidate)
+        }
+
+        addCandidate(encodeImageVariant(img, baseScale, 0.9))
+        for (const step of STEGO_IMAGE_COMPRESSION_STEPS) {
+            try {
+                addCandidate(encodeImageVariant(img, baseScale * step.scale, step.quality))
+            } catch {
+                // Skip bad candidate and continue trying smaller variants.
+            }
+        }
+
+        return variants.length > 0 ? variants : [dataUrl]
+    }, [encodeImageVariant])
+
+    const fitImageToBudget = useCallback(async (dataUrl, budgetBytes, maxDimension = 1400) => {
+        const candidates = await buildImageCandidates(dataUrl, maxDimension)
+        for (const candidate of candidates) {
+            if (utf8ByteLengthOf(candidate) <= budgetBytes) return candidate
+        }
+        return candidates[candidates.length - 1] || dataUrl
+    }, [buildImageCandidates])
+
+    const handleStegoImageFile = useCallback(async (file) => {
+        if (!file) return
+        if (!file.type.startsWith("image/")) {
+            toast.error("Please select an image file", { duration: 2000 })
+            throw new Error("INVALID_STEGO_PREVIEW_FILE")
+        }
+        const dataUrl = /** @type {string} */ (await readFileAsDataUrl(file))
+        const fitted = await fitImageToBudget(dataUrl, STEGO_IMAGE_BUDGET_BYTES, 1600)
+        clearStegoImage()
+        setStegoImage(fitted)
+    }, [clearStegoImage, fitImageToBudget])
+
+    const handleStegoSecretImageFile = useCallback(async (file) => {
+        if (!file) return
+        if (!file.type.startsWith("image/")) {
+            toast.error("Please select an image file", { duration: 2000 })
+            throw new Error("INVALID_STEGO_SECRET_FILE")
+        }
+        const dataUrl = /** @type {string} */ (await readFileAsDataUrl(file))
+        const fitted = await fitImageToBudget(dataUrl, STEGO_IMAGE_BUDGET_BYTES, 1400)
+        setStegoSecretImage(fitted)
+    }, [fitImageToBudget])
+
+    const handleStegoPreviewDragOver = useCallback((event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setStegoPreviewDragActive(true)
     }, [])
+
+    const handleStegoPreviewDragLeave = useCallback((event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setStegoPreviewDragActive(false)
+    }, [])
+
+    const handleStegoPreviewDrop = useCallback(async (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setStegoPreviewDragActive(false)
+        const file = event.dataTransfer?.files?.[0]
+        if (!file) return
+        try {
+            await handleStegoImageFile(file)
+        } catch {
+            // Errors are already surfaced via toast.
+        }
+    }, [handleStegoImageFile])
+
+    const handleStegoHiddenDragOver = useCallback((event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setStegoHiddenDragActive(true)
+    }, [])
+
+    const handleStegoHiddenDragLeave = useCallback((event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setStegoHiddenDragActive(false)
+    }, [])
+
+    const handleStegoHiddenDrop = useCallback(async (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        setStegoHiddenDragActive(false)
+        const file = event.dataTransfer?.files?.[0]
+        if (!file) return
+        try {
+            await handleStegoSecretImageFile(file)
+        } catch {
+            // Errors are already surfaced via toast.
+        }
+    }, [handleStegoSecretImageFile])
 
     const sendStegoMessage = useCallback(async () => {
-        const secretPayload = stegoMode === "image" ? stegoSecretImage : stegoSecret.trim()
-        if (!stegoImage || !secretPayload || stegoEncoding) return
+        const secretText = stegoSecret.trim()
+        if (!stegoImage || (!secretText && !stegoSecretImage) || stegoEncoding) return
+
         setStegoEncoding(true)
         try {
-            if (isSecureRoom) {
-                if (!secureRoomKey) {
-                    throw new Error("Secure room key is missing")
+            const previewCandidates = await buildImageCandidates(stegoImage, 1600)
+            const hiddenCandidates = stegoSecretImage ? await buildImageCandidates(stegoSecretImage, 1400) : [""]
+
+            let selectedPacket = ""
+            let wasCompressed = false
+
+            outer:
+            for (const previewCandidate of previewCandidates) {
+                for (const hiddenCandidate of hiddenCandidates) {
+                    const packet = buildStegoPacket({
+                        previewImage: previewCandidate,
+                        hiddenImage: hiddenCandidate,
+                        secretText,
+                    })
+                    if (utf8ByteLengthOf(packet) <= STEGO_PACKET_MAX_BYTES) {
+                        selectedPacket = packet
+                        wasCompressed =
+                            previewCandidate !== stegoImage
+                            || (stegoSecretImage ? hiddenCandidate !== stegoSecretImage : false)
+                        break outer
+                    }
                 }
-
-                const recipients = participants.filter((p) => p && p !== username)
-                if (recipients.length === 0) {
-                    throw new Error("Recipient unavailable for WebRTC transfer")
-                }
-
-                if (!isRds3WorkerSupported()) {
-                    throw new Error("Secure stego requires Worker + OffscreenCanvas + createImageBitmap + WebCrypto support.")
-                }
-
-                const coverBlob = await fetch(stegoImage).then((res) => res.blob())
-                const encryptedSecretEnvelope = await encryptJsonEnvelope(secureRoomKey, {
-                    mode: stegoMode,
-                    payload: secretPayload,
-                    timestamp: Date.now(),
-                }, "stego.payload")
-
-                const encoded = await encodeRds3StegoPng({
-                    coverFile: coverBlob,
-                    roomKeyHex: secureRoomKey,
-                    secretMeta: {
-                        codec: "rds3",
-                        v: encryptedSecretEnvelope.v,
-                        kind: encryptedSecretEnvelope.kind,
-                        ivHex: encryptedSecretEnvelope.ivHex,
-                        aadHex: encryptedSecretEnvelope.aadHex || "",
-                        createdAt: encryptedSecretEnvelope.createdAt,
-                    },
-                    secretCipherHex: encryptedSecretEnvelope.cipherHex,
-                })
-                const pngBlob = encoded.pngBlob
-                if (!pngBlob || pngBlob.size <= 0) {
-                    throw new Error("Stego encoding failed")
-                }
-
-                const stegoFile = new File([pngBlob], `stego-${Date.now()}.png`, { type: "image/png" })
-                await handleSendFile(stegoFile, recipients)
-                mutate({
-                    text: `[secure stego sent via p2p to ${recipients.length} recipient${recipients.length === 1 ? "" : "s"}]`,
-                    ...(vanishAfter > 0 ? { vanishAfter } : {}),
-                })
-
-                setSendFxId((prev) => prev + 1)
-                setIsSendFxActive(true)
-                if (sendFxTimeoutRef.current) clearTimeout(sendFxTimeoutRef.current)
-                sendFxTimeoutRef.current = setTimeout(() => setIsSendFxActive(false), 980)
-                closeStegoModal()
-                toast.success("Stego PNG encoded and sent via P2P", { duration: 2500 })
-                return
             }
 
-            const { encodeMessage, decodeMessage } = await import("@/lib/stego")
-            const encoded = await encodeMessage(stegoImage, secretPayload)
-            const verified = await decodeMessage(encoded)
-            if (verified !== secretPayload) {
-                throw new Error("Stego verification failed. Try a larger PNG cover image or smaller secret payload.")
+            if (!selectedPacket) {
+                throw new Error("Selected content is too large. Try smaller images or shorter secret text.")
             }
-            mutate({ text: encoded, type: "stego", ...(vanishAfter > 0 ? { vanishAfter } : {}) })
-            setSendFxId((prev) => prev + 1)
-            setIsSendFxActive(true)
-            if (sendFxTimeoutRef.current) clearTimeout(sendFxTimeoutRef.current)
-            sendFxTimeoutRef.current = setTimeout(() => setIsSendFxActive(false), 980)
+
+            mutate({ text: selectedPacket, type: "stego", ...(vanishAfter > 0 ? { vanishAfter } : {}) })
+            void triggerSendFx()
             closeStegoModal()
-            toast.success("Stego image sent!", { duration: 2000 })
+
+            if (wasCompressed) {
+                toast.success("Hidden payload sent (images auto-compressed to fit).", { duration: 2500 })
+            } else {
+                toast.success("Hidden payload sent.", { duration: 2200 })
+            }
         } catch (err) {
             const message = err instanceof Error && err.message
                 ? err.message
-                : "Failed to encode stego image"
+                : "Failed to send hidden payload"
             toast.error(message, { duration: 3000 })
         } finally {
             setStegoEncoding(false)
         }
-    }, [stegoImage, stegoSecret, stegoSecretImage, stegoMode, stegoEncoding, isSecureRoom, secureRoomKey, participants, username, handleSendFile, vanishAfter, mutate, closeStegoModal])
-
-    const handleDecodeStegoFile = useCallback(async (event) => {
-        const file = event.target.files?.[0]
-        if (!file) return
-        if (!isSecureRoom || !secureRoomKey) {
-            toast.error("Secure room key is unavailable", { duration: 2500 })
-            if (stegoDecodeFileRef.current) stegoDecodeFileRef.current.value = ""
-            return
-        }
-        try {
-            /** @type {any | null} */
-            let decrypted = null
-            /** @type {Error | null} */
-            let latestError = null
-
-            // 1) RDS3 seeded-lossless decode (current format)
-            try {
-                const extractedRds3 = await decodeRds3StegoPng({
-                    stegoFile: file,
-                    roomKeyHex: secureRoomKey,
-                })
-                if (!extractedRds3.crcOk) {
-                    throw new Error("RDS3 integrity check failed")
-                }
-                const ivHex = typeof extractedRds3.secretMeta?.ivHex === "string" ? extractedRds3.secretMeta.ivHex : ""
-                if (!ivHex) {
-                    throw new Error("RDS3 payload metadata missing ivHex")
-                }
-                decrypted = await decryptJsonEnvelope(secureRoomKey, {
-                    ivHex,
-                    cipherHex: extractedRds3.secretCipherHex,
-                })
-            } catch (error) {
-                latestError = error instanceof Error ? error : new Error("RDS3 decode failed")
-            }
-
-            // 2) RDS2 deterministic-lossless decode (legacy secure format)
-            if (!decrypted) {
-                try {
-                    const extracted = await extractLosslessStegoPayload(file)
-                    const ivHex = typeof extracted.secretMeta?.ivHex === "string" ? extracted.secretMeta.ivHex : ""
-                    if (!ivHex) {
-                        throw new Error("Stego payload metadata missing ivHex")
-                    }
-                    decrypted = await decryptJsonEnvelope(secureRoomKey, {
-                        ivHex,
-                        cipherHex: extracted.secretCipherHex,
-                    })
-                } catch (error) {
-                    latestError = error instanceof Error ? error : new Error("RDS2 decode failed")
-                }
-            }
-
-            // 3) Legacy inline STEG decode (historical compatibility)
-            if (!decrypted) {
-                try {
-                    const imageDataUrl = /** @type {string} */ (await blobToDataUrl(file))
-                    const { decodeMessage } = await import("@/lib/stego")
-                    const hidden = await decodeMessage(imageDataUrl)
-                    if (hidden && hidden.length > 0) {
-                        decrypted = {
-                            mode: "text",
-                            payload: hidden,
-                            legacy: true,
-                        }
-                    }
-                } catch (error) {
-                    latestError = error instanceof Error ? error : new Error("Legacy decode failed")
-                }
-            }
-
-            if (!decrypted) {
-                throw latestError || new Error("No hidden payload found")
-            }
-
-            setStegoDecodeResult(decrypted)
-            toast.success("Stego payload decoded", { duration: 2200 })
-        } catch (error) {
-            const message = error instanceof Error ? error.message : "Failed to decode stego file"
-            toast.error(message, { duration: 3000 })
-        } finally {
-            if (stegoDecodeFileRef.current) stegoDecodeFileRef.current.value = ""
-        }
-    }, [blobToDataUrl, isSecureRoom, secureRoomKey])
+    }, [
+        stegoImage,
+        stegoSecret,
+        stegoSecretImage,
+        stegoEncoding,
+        mutate,
+        vanishAfter,
+        closeStegoModal,
+        buildImageCandidates,
+        triggerSendFx,
+    ])
 
     const handleStegoSecretImageSelect = useCallback(async (e) => {
         const file = e.target.files?.[0]
         if (!file) return
-        if (!file.type.startsWith("image/")) {
-            toast.error("Please select an image file", { duration: 2000 })
-            return
-        }
         try {
-            const reader = new FileReader()
-            const dataUrl = await new Promise((resolve, reject) => {
-                reader.onload = () => resolve(reader.result)
-                reader.onerror = reject
-                reader.readAsDataURL(file)
-            })
-            const compressed = await compressImage(dataUrl)
-            setStegoSecretImage(compressed)
+            await handleStegoSecretImageFile(file)
         } catch {
-            toast.error("Failed to load secret image", { duration: 2000 })
+            if (file.type.startsWith("image/")) {
+                toast.error("Failed to load secret image", { duration: 2000 })
+            }
+        } finally {
+            if (stegoSecretFileRef.current) stegoSecretFileRef.current.value = ""
         }
-        if (stegoSecretFileRef.current) stegoSecretFileRef.current.value = ""
-    }, [compressImage])
+    }, [handleStegoSecretImageFile])
 
-    const handleStegoImageSelect = useCallback((e) => {
+    const handleStegoImageSelect = useCallback(async (e) => {
         const file = e.target.files?.[0]
         if (!file) return
-        if (!file.type.startsWith("image/")) {
-            toast.error("Please select an image file", { duration: 2000 })
+        try {
+            await handleStegoImageFile(file)
+        } catch {
+            if (file.type.startsWith("image/")) {
+                toast.error("Unable to load image. Please use PNG, JPG, or WebP.", { duration: 3000 })
+            }
+        } finally {
             if (stegoFileRef.current) stegoFileRef.current.value = ""
-            return
         }
-        const objectUrl = URL.createObjectURL(file)
-        const img = new Image()
-        img.decoding = "async"
-        img.onload = () => {
-            clearStegoImage()
-            stegoObjectUrlRef.current = objectUrl
-            setStegoImage(objectUrl)
-        }
-        img.onerror = () => {
-            URL.revokeObjectURL(objectUrl)
-            toast.error("Unable to load image. Please use PNG, JPG, or WebP.", { duration: 3000 })
-        }
-        img.src = objectUrl
-        if (stegoFileRef.current) stegoFileRef.current.value = ""
-    }, [clearStegoImage])
+    }, [handleStegoImageFile])
 
     const listRef = useListRef(null)
     const hasInput = input.trim().length > 0
+    const isSendArmed = hasInput || isSendFxActive
 
     // Filter out vanished messages
     const visibleMessages = useMemo(() => {
@@ -1776,12 +2828,26 @@ const Page = () => {
     const getRowHeight = useCallback((index) => {
         const msg = visibleMessages?.[index]
         if (!msg) return 72
-        if (msg.type === "stego") return 360 // image + reveal area
+        if (msg.type === "stego") {
+            return 390
+        }
+        if (msg.type === "file") {
+            const hasImagePreview = typeof msg.text === "string" && msg.text.includes("\"p\":\"data:image/")
+            return hasImagePreview ? 380 : 124
+        }
+        if (parseLegacyFileNotice(msg.text)) return 124
         if (msg.type === "audio") return 80 // voice note player
         const charsPerLine = 60
         const lineCount = Math.ceil(msg.text.length / charsPerLine)
         return Math.max(72, 48 + lineCount * 22)
     }, [visibleMessages])
+
+    const messageRowProps = useMemo(() => ({
+        messages: visibleMessages,
+        username,
+        onVanish: handleVanishMessage,
+        reducedMotion: shouldReduceMotion,
+    }), [handleVanishMessage, shouldReduceMotion, username, visibleMessages])
 
     // Auto-scroll to bottom on new messages
     useEffect(() => {
@@ -1793,7 +2859,14 @@ const Page = () => {
 
 
     return (
-        <main data-nuke-source="room" className="scanline-bg flex flex-col h-screen max-h-screen overflow-hidden bg-black relative">
+        <main
+            data-nuke-source="room"
+            className="scanline-bg flex flex-col h-screen max-h-screen overflow-hidden bg-black relative"
+            onDragEnter={handleRoomDragEnter}
+            onDragOver={handleRoomDragOver}
+            onDragLeave={handleRoomDragLeave}
+            onDrop={handleRoomDrop}
+        >
 
             {/* Particle grid background */}
             <CyberCanvas opacity={0.42} density={0.6} />
@@ -1808,7 +2881,7 @@ const Page = () => {
             >
 
                 {/* ── Top Row: Identity | Title | Timer ── */}
-                <div className="w-full px-3 py-2 sm:px-5 sm:py-3">
+                <div className="w-full px-3 py-2 pl-14 sm:px-5 sm:py-3 md:pl-14">
                     <div className="flex flex-col gap-2 md:gap-0 md:grid md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center">
 
                         {/* Mobile: Title first row */}
@@ -1915,10 +2988,11 @@ const Page = () => {
                                 </div>
                             )}
                             <motion.button
-                                onClick={() => setShowPanicModal(true)}
-                                disabled={isNukeRunning}
+                                onClick={openPanicModal}
+                                disabled={isNukeRunning || isSecureRoom}
                                 className="flex items-center border border-red-900/40 bg-red-950/20 hover:bg-red-900/30 px-2 py-1.5 rounded-sm text-[11px] font-bold text-red-500/70 hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                 whileTap={{ scale: 0.95 }}
+                                title={isSecureRoom ? "Panic mode unavailable in secure rooms" : (panicShortcut ? `Panic mode (${panicShortcut})` : "Panic mode")}
                             >
                                 🚨
                             </motion.button>
@@ -2009,11 +3083,11 @@ const Page = () => {
                         >
                             <div className="flex items-center gap-2">
                                 <motion.button
-                                    onClick={() => setShowPanicModal(true)}
-                                    disabled={isNukeRunning}
+                                    onClick={openPanicModal}
+                                    disabled={isNukeRunning || isSecureRoom}
                                     className="flex items-center gap-1 border border-red-900/40 bg-red-950/20 hover:bg-red-900/30 px-2 py-1.5 rounded-sm text-[11px] font-bold text-red-500/70 hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                     whileTap={{ scale: 0.95 }}
-                                    title="Panic Mode — instantly destroy room"
+                                    title={isSecureRoom ? "Panic mode unavailable in secure rooms" : (panicShortcut ? `Panic Mode — ${panicShortcut}` : "Panic Mode — instantly destroy room")}
                                 >
                                     🚨
                                 </motion.button>
@@ -2154,7 +3228,7 @@ const Page = () => {
                         <span className="text-xs sm:text-sm font-bold text-green-400 tracking-wide truncate min-w-0">{roomId}</span>
                         <motion.button
                             onClick={copyLink}
-                            className="flex min-w-[88px] items-center justify-center gap-1.5 border border-zinc-700/40 bg-zinc-800/60 hover:bg-zinc-700/60 px-3 py-1 rounded-sm text-[10px] font-bold transition-colors"
+                            className="micro-btn flex min-w-[88px] items-center justify-center gap-1.5 border border-zinc-700/40 bg-zinc-800/60 hover:bg-zinc-700/60 px-3 py-1 rounded-sm text-[10px] font-bold transition-colors"
                             whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                             transition={{ type: "spring", stiffness: 400, damping: 25 }}
@@ -2221,23 +3295,21 @@ const Page = () => {
                             {/* Animated encryption hex visualization */}
                             <motion.div
                                 className="relative"
-                                animate={{ y: [0, -8, 0] }}
-                                transition={{ duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
+                                animate={shouldReduceMotion ? { opacity: 0.88 } : { y: [0, -8, 0] }}
+                                transition={shouldReduceMotion ? { duration: DUR_BASE, ease } : { duration: 3.5, repeat: Infinity, ease: "easeInOut" }}
                             >
                                 <div className="w-20 h-20 rounded-full border border-green-500/15 bg-green-500/5 flex items-center justify-center">
                                     <div className="grid grid-cols-3 gap-1">
-                                        {Array.from({ length: 9 }, (_, i) => (
+                                        {EMPTY_STATE_MATRIX_ITEMS.map((item, index) => (
                                             <motion.span
-                                                key={i}
+                                                key={`${item.char}-${index}`}
                                                 className="text-[9px] font-mono text-green-500/60 w-3 text-center"
-                                                animate={{ opacity: [0.2, 0.8, 0.2] }}
-                                                transition={{
-                                                    duration: 1.5 + Math.random(),
-                                                    repeat: Infinity,
-                                                    delay: i * 0.15,
-                                                }}
+                                                animate={shouldReduceMotion ? { opacity: 0.62 } : { opacity: [0.2, 0.8, 0.2] }}
+                                                transition={shouldReduceMotion
+                                                    ? { duration: DUR_FAST, ease }
+                                                    : { duration: item.duration, repeat: Infinity, delay: item.delay, ease: "linear" }}
                                             >
-                                                {String.fromCharCode(48 + Math.floor(Math.random() * 42))}
+                                                {item.char}
                                             </motion.span>
                                         ))}
                                     </div>
@@ -2261,7 +3333,7 @@ const Page = () => {
                         className="custom-scrollbar"
                         style={{ height: '100%' }}
                         rowComponent={/** @type {any} */ (MessageRow)}
-                        rowProps={/** @type {any} */ ({ messages: visibleMessages, username, onVanish: handleVanishMessage })}
+                        rowProps={/** @type {any} */ (messageRowProps)}
                     />
                 )}
             </div>
@@ -2282,7 +3354,7 @@ const Page = () => {
                             {/* Cancel recording */}
                             <motion.button
                                 onClick={cancelRecording}
-                                className="shrink-0 w-10 h-10 flex items-center justify-center rounded-sm border border-zinc-700/50 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+                                className="micro-btn shrink-0 w-10 h-10 flex items-center justify-center rounded-sm border border-zinc-700/50 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
                                 whileTap={{ scale: 0.92 }}
                                 title="Cancel recording"
                             >
@@ -2307,7 +3379,7 @@ const Page = () => {
                             {/* Send recording */}
                             <motion.button
                                 onClick={stopRecording}
-                                className="shrink-0 w-10 h-10 flex items-center justify-center rounded-sm border border-green-500/40 bg-green-600/20 hover:bg-green-600/30 text-green-400 hover:text-green-300 transition-colors"
+                                className="micro-btn shrink-0 w-10 h-10 flex items-center justify-center rounded-sm border border-green-500/40 bg-green-600/20 hover:bg-green-600/30 text-green-400 hover:text-green-300 transition-colors"
                                 whileHover={{ scale: 1.08 }}
                                 whileTap={{ scale: 0.92 }}
                                 title="Send voice message"
@@ -2324,7 +3396,7 @@ const Page = () => {
                             <div className="relative shrink-0 lg:hidden">
                                 <motion.button
                                     onClick={() => { setShowInputMenu(p => !p); setShowVanishPicker(false) }}
-                                    className={`w-10 h-10 flex items-center justify-center rounded-full border transition-all duration-200 ${showInputMenu
+                                    className={`micro-btn w-10 h-10 flex items-center justify-center rounded-full border transition-all duration-200 ${showInputMenu
                                         ? "bg-green-600/20 border-green-500/30 text-green-400 rotate-45"
                                         : "bg-zinc-900 border-zinc-700/50 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600/60"
                                         }`}
@@ -2354,13 +3426,13 @@ const Page = () => {
                                             initial={{ opacity: 0, y: 8, scale: 0.9 }}
                                             animate={{ opacity: 1, y: 0, scale: 1 }}
                                             exit={{ opacity: 0, y: 8, scale: 0.9 }}
-                                            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                                            transition={{ duration: DUR_FAST, ease }}
                                             className="absolute bottom-full mb-3 left-0 bg-zinc-900/95 backdrop-blur-sm border border-zinc-700/50 rounded-lg p-2 flex gap-1.5 z-50 shadow-xl shadow-black/40"
                                         >
                                             {/* Stego */}
                                             <motion.button
                                                 onClick={() => { setShowStegoModal(true); setShowInputMenu(false) }}
-                                                className="w-10 h-10 flex items-center justify-center rounded-lg bg-purple-600/15 hover:bg-purple-600/25 text-purple-400 hover:text-purple-300 transition-colors"
+                                                className="micro-btn w-10 h-10 flex items-center justify-center rounded-lg bg-purple-600/15 hover:bg-purple-600/25 text-purple-400 hover:text-purple-300 transition-colors"
                                                 whileHover={{ scale: 1.1 }}
                                                 whileTap={{ scale: 0.9 }}
                                                 title="Steganography"
@@ -2375,7 +3447,7 @@ const Page = () => {
                                             <div className="relative">
                                                 <motion.button
                                                     onClick={() => setShowVanishPicker(p => !p)}
-                                                    className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${vanishAfter > 0
+                                                    className={`micro-btn w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${vanishAfter > 0
                                                         ? "bg-orange-600/20 text-orange-400 hover:bg-orange-600/30"
                                                         : "bg-zinc-800/60 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/40"
                                                         }`}
@@ -2417,55 +3489,11 @@ const Page = () => {
                                 </AnimatePresence>
                             </div>
 
-                            {/* Input field */}
-                            <motion.div
-                                className="flex-1 min-w-0 relative rounded-full border input-focus-glow overflow-hidden"
-                                animate={{
-                                    borderColor: hasInput
-                                        ? "rgba(34,197,94,0.4)"
-                                        : "rgba(63,63,70,0.3)",
-                                    boxShadow: hasInput
-                                        ? "0 0 12px rgba(34,197,94,0.08)"
-                                        : "0 0 0 rgba(0,0,0,0)",
-                                }}
-                                transition={{ duration: 0.4, ease: "easeInOut" }}
-                            >
-                                <motion.button
-                                    onClick={() => { setShowFileSendModal(true); setShowInputMenu(false); setShowVanishPicker(false) }}
-                                    className="absolute left-2 top-1/2 -translate-y-1/2 z-10 w-9 h-9 flex items-center justify-center rounded-full bg-green-600/15 hover:bg-green-600/25 text-green-400 hover:text-green-300 transition-colors"
-                                    whileHover={{ scale: 1.06 }}
-                                    whileTap={{ scale: 0.92 }}
-                                    title="P2P File Transfer"
-                                >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-                                    </svg>
-                                </motion.button>
-
-                                <input
-                                    ref={inputRef}
-                                    value={input}
-                                    onChange={(e) => { setInput(e.target.value); setShowInputMenu(false) }}
-                                    onKeyDown={(e) => {
-                                        if (e.key === "Enter" && input.trim()) {
-                                            sendMessage()
-                                        }
-                                    }}
-                                    placeholder="Type a message..."
-                                    autoFocus
-                                    type="text"
-                                    className={`w-full min-w-0 bg-zinc-950/80 py-3 pl-14 pr-5 text-sm rounded-full focus:outline-none caret-green-500 placeholder:text-zinc-600 transition-colors duration-200 ${hasInput
-                                        ? "text-green-500"
-                                        : "text-zinc-300"
-                                        }`}
-                                />
-                            </motion.div>
-
-                            {/* Desktop quick tools — visible beside input */}
+                            {/* Desktop quick tools — moved to left of input */}
                             <div className="relative hidden lg:flex items-center gap-1.5 shrink-0 rounded-xl border border-zinc-700/50 bg-zinc-900/90 p-1.5">
                                 <motion.button
                                     onClick={() => { setShowStegoModal(true); setShowVanishPicker(false) }}
-                                    className="w-10 h-10 flex items-center justify-center rounded-lg bg-purple-600/15 hover:bg-purple-600/25 text-purple-400 hover:text-purple-300 transition-colors"
+                                    className="micro-btn w-10 h-10 flex items-center justify-center rounded-lg bg-purple-600/15 hover:bg-purple-600/25 text-purple-400 hover:text-purple-300 transition-colors"
                                     whileHover={{ scale: 1.06 }}
                                     whileTap={{ scale: 0.92 }}
                                     title="Steganography"
@@ -2479,7 +3507,7 @@ const Page = () => {
                                 <div className="relative">
                                     <motion.button
                                         onClick={() => setShowVanishPicker((p) => !p)}
-                                        className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${vanishAfter > 0
+                                        className={`micro-btn w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${vanishAfter > 0
                                             ? "bg-orange-600/20 text-orange-400 hover:bg-orange-600/30"
                                             : "bg-zinc-800/60 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/40"
                                             }`}
@@ -2517,79 +3545,146 @@ const Page = () => {
                                 </div>
                             </div>
 
-                            {/* Right-side action: Mic ↔ Send swap */}
-                            <div className="relative shrink-0 w-12 h-12">
-                                <AnimatePresence mode="wait">
-                                    {hasInput ? (
-                                        /* Send button */
-                                        <motion.button
-                                            key="send-btn"
-                                            onClick={sendMessage}
-                                            disabled={isPending}
-                                            className="absolute inset-0 flex items-center justify-center rounded-full bg-green-600 hover:bg-green-500 text-black transition-colors disabled:opacity-50 cursor-pointer"
-                                            initial={{ scale: 0.6, opacity: 0 }}
-                                            animate={{ scale: 1, opacity: 1 }}
-                                            exit={{ scale: 0.6, opacity: 0 }}
-                                            transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
-                                            whileTap={{ scale: 0.9 }}
+                            {/* Input field */}
+                            <motion.div
+                                className="flex-1 min-w-0 relative rounded-full border input-focus-glow overflow-hidden"
+                                animate={{
+                                    borderColor: hasInput
+                                        ? "rgba(34,197,94,0.42)"
+                                        : "rgba(63,63,70,0.3)",
+                                    boxShadow: isSendFxActive
+                                        ? "0 0 18px rgba(34,197,94,0.16)"
+                                        : (hasInput ? "0 0 12px rgba(34,197,94,0.08)" : "0 0 0 rgba(0,0,0,0)"),
+                                    scale: isSendFxActive ? [1, 0.995, 1] : 1,
+                                    x: isSendFxActive ? [0, 1, 0] : 0,
+                                }}
+                                transition={{ duration: isSendFxActive ? DUR_SLOW : DUR_BASE, ease }}
+                            >
+                                <motion.button
+                                    onClick={() => { setQueuedDroppedFile(null); setShowFileSendModal(true); setShowInputMenu(false); setShowVanishPicker(false) }}
+                                    className="micro-btn absolute left-2 top-1/2 -translate-y-1/2 z-10 w-9 h-9 flex items-center justify-center rounded-full bg-green-600/15 hover:bg-green-600/25 text-green-400 hover:text-green-300 transition-colors"
+                                    whileHover={{ scale: 1.06 }}
+                                    whileTap={{ scale: 0.92 }}
+                                    title="P2P File Transfer"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                                    </svg>
+                                </motion.button>
+
+                                <input
+                                    ref={inputRef}
+                                    value={input}
+                                    onChange={(e) => { setInput(e.target.value); setShowInputMenu(false) }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter" && input.trim()) {
+                                            sendMessage()
+                                        }
+                                    }}
+                                    placeholder="Type a message..."
+                                    autoFocus
+                                    type="text"
+                                    className={`w-full min-w-0 bg-zinc-950/80 py-3 pl-14 pr-5 text-sm rounded-full focus:outline-none caret-green-500 placeholder:text-zinc-600 transition-colors duration-200 ${hasInput
+                                        ? "text-green-500"
+                                        : "text-zinc-300"
+                                        }`}
+                                />
+                            </motion.div>
+
+                            {/* Right-side actions: Mic + Send */}
+                            <div className="shrink-0 flex items-center gap-2">
+                                <motion.button
+                                    key="mic-btn"
+                                    onClick={startRecording}
+                                    className="micro-btn w-11 h-11 flex items-center justify-center rounded-full bg-zinc-900 border border-zinc-700/50 text-zinc-400 hover:text-green-400 hover:border-green-500/30 transition-colors cursor-pointer"
+                                    transition={{ duration: DUR_FAST, ease }}
+                                    whileTap={shouldReduceMotion ? {} : { scale: 0.9 }}
+                                    title="Record voice message"
+                                >
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+                                        <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                                        <line x1="12" y1="19" x2="12" y2="23" />
+                                        <line x1="8" y1="23" x2="16" y2="23" />
+                                    </svg>
+                                </motion.button>
+
+                                <motion.button
+                                    key="send-btn"
+                                    onClick={sendMessage}
+                                    disabled={(!hasInput && !isSendFxActive) || isPending}
+                                    className={`micro-btn relative w-[80fpx] h-[52px] flex items-center justify-center rounded-md border overflow-hidden transition-colors cursor-pointer ${isSendArmed
+                                        ? "bg-green-950/35 hover:bg-green-900/35 border-green-500/70 text-green-400"
+                                        : "bg-zinc-900 border-zinc-700/50 text-zinc-500"
+                                        } ${isSendArmed
+                                            ? (isSendFxActive
+                                                ? "shadow-[0_0_0_1px_rgba(74,222,128,0.45),0_12px_24px_rgba(22,101,52,0.34)]"
+                                                : "shadow-[0_0_0_1px_rgba(74,222,128,0.24),0_8px_20px_rgba(22,101,52,0.24)]")
+                                            : "shadow-[0_0_0_1px_rgba(63,63,70,0.26),0_6px_16px_rgba(0,0,0,0.28)]"
+                                        } disabled:opacity-55 disabled:cursor-not-allowed`}
+                                    animate={{
+                                        y: isSendFxActive ? [0, -1, 0] : 0,
+                                    }}
+                                    transition={{ duration: isSendFxActive ? DUR_BASE : DUR_FAST, ease }}
+                                    whileHover={!shouldReduceMotion && hasInput ? { y: -1 } : { y: 0 }}
+                                    whileTap={shouldReduceMotion ? {} : { scale: 0.98 }}
+                                    title="Send message"
+                                >
+                                    <motion.span
+                                        className="pointer-events-none absolute inset-0 rounded-md border-2 border-green-400/60"
+                                        initial={{ scale: 1, opacity: 0 }}
+                                        animate={isSendFxActive ? { scale: [1, 1.32], opacity: [0.5, 0] } : { scale: 1, opacity: 0 }}
+                                        transition={{ duration: DUR_BASE, ease }}
+                                    />
+                                    <motion.span
+                                        className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 h-[2px] w-12 rounded-full bg-gradient-to-r from-emerald-300/0 via-emerald-300/95 to-emerald-300/0 blur-[1px]"
+                                        initial={SEND_TRAIL_REST_ANIMATION}
+                                        animate={sendTrailControls}
+                                    />
+                                    <motion.span
+                                        className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 h-[1.5px] w-10 rounded-full bg-gradient-to-r from-emerald-300/0 via-emerald-300/95 to-emerald-300/0 blur-[0.8px]"
+                                        initial={SEND_WIND_REST_ANIMATION}
+                                        animate={sendWindControls}
+                                    />
+
+                                    <div className="relative z-10 flex items-center justify-center">
+                                        <motion.span
+                                            className="will-change-transform w-4 h-4 flex items-center justify-center"
+                                            initial={SEND_PLANE_REST_ANIMATION}
+                                            animate={sendPlaneControls}
                                         >
-                                            {/* Pulse ring on send */}
-                                            <AnimatePresence>
-                                                {isSendFxActive && (
-                                                    <motion.span
-                                                        key={`send-pulse-${sendFxId}`}
-                                                        className="pointer-events-none absolute inset-0 rounded-full border-2 border-green-400/60"
-                                                        initial={{ scale: 1, opacity: 0.8 }}
-                                                        animate={{ scale: 1.5, opacity: 0 }}
-                                                        exit={{ opacity: 0 }}
-                                                        transition={{ duration: 0.6 }}
-                                                    />
-                                                )}
-                                            </AnimatePresence>
-                                            <motion.span
-                                                className="relative z-10"
-                                                initial={false}
-                                                animate={isSendFxActive
-                                                    ? { x: [0, 3, 40, 40, -40, -40, 0], y: [0, -4, -30, -30, 30, 30, 0], rotate: [-12, -20, -35, -35, -6, -6, -12] }
-                                                    : { x: 0, y: 0, rotate: -12 }}
-                                                transition={{ duration: 0.9, times: [0, 0.15, 0.32, 0.38, 0.39, 0.65, 1], ease: "easeInOut" }}
-                                            >
-                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                                    <line x1="22" y1="2" x2="11" y2="13" />
-                                                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                                                </svg>
-                                            </motion.span>
-                                        </motion.button>
-                                    ) : (
-                                        /* Mic button */
-                                        <motion.button
-                                            key="mic-btn"
-                                            onClick={startRecording}
-                                            className="absolute inset-0 flex items-center justify-center rounded-full bg-zinc-900 border border-zinc-700/50 text-zinc-400 hover:text-green-400 hover:border-green-500/30 transition-colors cursor-pointer"
-                                            initial={{ scale: 0.6, opacity: 0 }}
-                                            animate={{ scale: 1, opacity: 1 }}
-                                            exit={{ scale: 0.6, opacity: 0 }}
-                                            transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
-                                            whileTap={{ scale: 0.9 }}
-                                            title="Record voice message"
-                                        >
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-                                                <path d="M19 10v2a7 7 0 01-14 0v-2" />
-                                                <line x1="12" y1="19" x2="12" y2="23" />
-                                                <line x1="8" y1="23" x2="16" y2="23" />
+                                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <path
+                                                    d="M22 2 11 13"
+                                                    stroke="currentColor"
+                                                    strokeWidth="1.65"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
+                                                <path
+                                                    d="M22 2 15 22 11 13 2 9 22 2Z"
+                                                    stroke="currentColor"
+                                                    strokeWidth="1.65"
+                                                    fill="none"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
+                                                <path
+                                                    d="M11 13 15 22"
+                                                    stroke="currentColor"
+                                                    strokeWidth="1.65"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
                                             </svg>
-                                        </motion.button>
-                                    )}
-                                </AnimatePresence>
+                                        </motion.span>
+                                    </div>
+                                </motion.button>
                             </div>
                         </>
                     )}
                 </div>
             </motion.div>
-
-            {/* ═══════════════════ TOASTER ═══════════════════ */}
-            <Toaster position="top-center" />
 
             {/* ═══════════════════ DESTROY REQUEST MODAL (Creator Only) ═══════════════════ */}
             <AnimatePresence>
@@ -2664,32 +3759,90 @@ const Page = () => {
                                 <span className="text-2xl">🚨</span>
                                 <h3 className="text-red-400 font-bold text-lg tracking-wide">PANIC MODE</h3>
                             </div>
-                            <p className="text-zinc-500 text-xs mb-4 leading-relaxed">
-                                Enter the panic password to instantly destroy this room. This cannot be undone.
-                            </p>
+                            {isSecureRoom ? (
+                                <p className="text-zinc-500 text-xs mb-4 leading-relaxed">
+                                    Panic mode is unavailable in secure rooms.
+                                </p>
+                            ) : !hasPanicPassword ? (
+                                <p className="text-zinc-500 text-xs mb-4 leading-relaxed">
+                                    This room has no panic password configured.
+                                </p>
+                            ) : (
+                                <p className="text-zinc-500 text-xs mb-4 leading-relaxed">
+                                    Enter the panic password to instantly destroy this room. This cannot be undone.
+                                </p>
+                            )}
                             <input
                                 type="password"
                                 value={panicInput}
                                 onChange={(e) => setPanicInput(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === "Enter" && panicInput.trim()) triggerPanic(panicInput.trim()) }}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" && panicInput.trim() && !isSecureRoom && hasPanicPassword) {
+                                        triggerPanic(panicInput.trim())
+                                    }
+                                }}
                                 placeholder="Panic password"
                                 autoFocus
-                                className="w-full bg-black border border-red-900/40 focus:border-red-500/60 p-2.5 text-sm text-red-300 font-mono rounded-sm outline-none transition-colors placeholder:text-zinc-600 mb-4"
+                                disabled={isSecureRoom || !hasPanicPassword}
+                                className="w-full bg-black border border-red-900/40 focus:border-red-500/60 p-2.5 text-sm text-red-300 font-mono rounded-sm outline-none transition-colors placeholder:text-zinc-600 mb-4 disabled:opacity-40 disabled:cursor-not-allowed"
                             />
+                            <div className="mb-4 border border-zinc-800/80 bg-zinc-900/30 rounded-sm p-3 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">
+                                        Panic Shortcut
+                                    </p>
+                                    <p className="text-[11px] text-red-300 font-mono truncate">
+                                        {panicShortcut || "Not armed"}
+                                    </p>
+                                </div>
+                                <p className="text-[10px] text-zinc-600 leading-relaxed">
+                                    Stored for this browser session only. Pressing the armed combo triggers instant panic.
+                                </p>
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsRecordingPanicShortcut((prev) => !prev)}
+                                        disabled={isSecureRoom || !hasPanicPassword}
+                                        className="py-1.5 rounded-sm border border-zinc-700/60 bg-zinc-900/40 hover:bg-zinc-800/60 text-[10px] font-bold text-zinc-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        {isRecordingPanicShortcut ? "Press keys..." : "Record"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={savePanicShortcut}
+                                        disabled={isSecureRoom || !hasPanicPassword || !panicShortcut || (!panicInput.trim() && !panicShortcutPassword.trim())}
+                                        className="py-1.5 rounded-sm border border-red-900/60 bg-red-950/30 hover:bg-red-900/40 text-[10px] font-bold text-red-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        Arm
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={clearPanicShortcut}
+                                        disabled={!panicShortcut && !panicShortcutPassword}
+                                        className="py-1.5 rounded-sm border border-zinc-700/60 bg-zinc-900/40 hover:bg-zinc-800/60 text-[10px] font-bold text-zinc-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
                             <div className="flex gap-3">
                                 <motion.button
                                     onClick={(event) => {
                                         setNukeOriginFromTrigger(event.currentTarget)
                                         triggerPanic(panicInput.trim())
                                     }}
-                                    disabled={!panicInput.trim() || isNukeRunning}
+                                    disabled={!panicInput.trim() || isNukeRunning || isSecureRoom || !hasPanicPassword}
                                     className="flex-1 py-2.5 rounded-sm border border-red-700/60 bg-red-900/40 hover:bg-red-800/50 text-red-300 font-bold text-sm tracking-wider transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                     whileTap={{ scale: 0.95 }}
                                 >
                                     💣 DESTROY
                                 </motion.button>
                                 <motion.button
-                                    onClick={() => { setShowPanicModal(false); setPanicInput("") }}
+                                    onClick={() => {
+                                        setShowPanicModal(false)
+                                        setPanicInput("")
+                                        setIsRecordingPanicShortcut(false)
+                                    }}
                                     className="flex-1 py-2.5 rounded-sm border border-zinc-700/60 bg-zinc-800/40 hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-300 font-bold text-sm tracking-wider transition-colors"
                                     whileTap={{ scale: 0.95 }}
                                 >
@@ -2697,6 +3850,23 @@ const Page = () => {
                                 </motion.button>
                             </div>
                         </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {isRoomDragActive && !showFileSendModal && !showStegoModal && (
+                    <motion.div
+                        className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/55 border-2 border-dashed border-green-500/60"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.12 }}
+                    >
+                        <div className="px-6 py-4 rounded-sm border border-green-500/40 bg-zinc-950/90 text-center">
+                            <p className="text-green-400 text-xs font-bold uppercase tracking-wider">Drop File To Send</p>
+                            <p className="text-zinc-500 text-[10px] mt-1">Release to open recipient selection</p>
+                        </div>
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -2725,114 +3895,87 @@ const Page = () => {
                                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                                     <circle cx="12" cy="12" r="3" />
                                 </svg>
-                                <h3 className="text-purple-400 font-bold text-sm uppercase tracking-wider">Steganography</h3>
+                                <h3 className="text-purple-400 font-bold text-sm uppercase tracking-wider">Hidden Payload</h3>
                             </div>
                             <p className="text-zinc-500 text-[11px] mb-4 leading-relaxed">
-                                Hide a secret message or image inside an innocent-looking cover image. Only someone who clicks &quot;Reveal&quot; can see it.
+                                Choose the visible preview image, then attach hidden text and/or hidden image for reveal.
                             </p>
-
-                            {/* Mode toggle */}
-                            <div className="flex mb-4 border border-zinc-800 rounded-sm overflow-hidden">
-                                <button
-                                    onClick={() => setStegoMode("text")}
-                                    className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${stegoMode === "text"
-                                        ? "bg-purple-600/20 text-purple-400 border-r border-purple-500/30"
-                                        : "bg-zinc-900 text-zinc-500 hover:text-zinc-300 border-r border-zinc-800"
-                                        }`}
-                                >
-                                    🔤 Hide Text
-                                </button>
-                                <button
-                                    onClick={() => setStegoMode("image")}
-                                    className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${stegoMode === "image"
-                                        ? "bg-purple-600/20 text-purple-400"
-                                        : "bg-zinc-900 text-zinc-500 hover:text-zinc-300"
-                                        }`}
-                                >
-                                    🖼️ Hide Image
-                                </button>
-                            </div>
 
                             {/* Cover image upload */}
-                            <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-bold mb-2">Cover Image (what others see)</p>
-                            {stegoImage ? (
-                                <div className="mb-4 relative group">
-                                    <img src={stegoImage} alt="Cover" className="max-h-[200px] w-full object-contain rounded-sm border border-zinc-800 bg-black" />
+                            <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-bold mb-2">Preview Image (what others see)</p>
+                            <div
+                                className={`mb-4 rounded-sm transition-colors ${stegoPreviewDragActive ? "ring-2 ring-purple-500/60 ring-offset-0" : ""}`}
+                                onDragEnter={handleStegoPreviewDragOver}
+                                onDragOver={handleStegoPreviewDragOver}
+                                onDragLeave={handleStegoPreviewDragLeave}
+                                onDrop={handleStegoPreviewDrop}
+                            >
+                                {stegoImage ? (
+                                    <div className="relative group">
+                                        <img src={stegoImage} alt="Preview" className="max-h-[200px] w-full object-contain rounded-sm border border-zinc-800 bg-black" />
+                                        <button
+                                            onClick={clearStegoImage}
+                                            className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full bg-black/70 text-zinc-400 hover:text-white text-xs cursor-pointer"
+                                        >✕</button>
+                                    </div>
+                                ) : (
                                     <button
-                                        onClick={clearStegoImage}
-                                        className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full bg-black/70 text-zinc-400 hover:text-white text-xs cursor-pointer"
-                                    >✕</button>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => stegoFileRef.current?.click()}
-                                    className="w-full mb-4 py-6 border-2 border-dashed border-zinc-700 hover:border-purple-500/50 rounded-sm text-zinc-500 hover:text-purple-400 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                                >
-                                    Click to select cover image
-                                </button>
-                            )}
+                                        onClick={() => stegoFileRef.current?.click()}
+                                        className={`w-full py-6 border-2 border-dashed rounded-sm text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${stegoPreviewDragActive
+                                            ? "border-purple-500/60 text-purple-400 bg-purple-900/10"
+                                            : "border-zinc-700 text-zinc-500 hover:border-purple-500/50 hover:text-purple-400"
+                                            }`}
+                                    >
+                                        Drop preview image here or click to select
+                                    </button>
+                                )}
+                            </div>
                             <input ref={stegoFileRef} type="file" accept="image/*" className="hidden" onChange={handleStegoImageSelect} />
 
-                            {/* Secret payload — text or image */}
-                            <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-bold mb-2">
-                                {stegoMode === "text" ? "Secret Message" : "Secret Image (what's hidden)"}
-                            </p>
-                            {stegoMode === "text" ? (
-                                <textarea
-                                    value={stegoSecret}
-                                    onChange={e => setStegoSecret(e.target.value)}
-                                    placeholder="Type your secret message..."
-                                    rows={3}
-                                    className="w-full bg-black border border-zinc-800 focus:border-purple-500/50 p-3 text-sm text-purple-300 font-mono rounded-sm outline-none transition-colors placeholder:text-zinc-600 mb-4 resize-none"
-                                />
-                            ) : (
-                                <>
-                                    {stegoSecretImage ? (
-                                        <div className="mb-4 relative group">
-                                            <img src={stegoSecretImage} alt="Secret" className="max-h-[160px] w-full object-contain rounded-sm border border-purple-900/40 bg-black" />
-                                            <button
-                                                onClick={() => setStegoSecretImage(null)}
-                                                className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full bg-black/70 text-zinc-400 hover:text-white text-xs cursor-pointer"
-                                            >✕</button>
-                                            <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-purple-600/30 backdrop-blur-sm rounded-sm text-[8px] text-purple-300 font-bold uppercase tracking-wider">
-                                                Hidden
-                                            </div>
-                                        </div>
-                                    ) : (
+                            <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-bold mb-2">Secret Text (optional)</p>
+                            <textarea
+                                value={stegoSecret}
+                                onChange={e => setStegoSecret(e.target.value)}
+                                placeholder="Type your secret message..."
+                                rows={3}
+                                className="w-full bg-black border border-zinc-800 focus:border-purple-500/50 p-3 text-sm text-purple-300 font-mono rounded-sm outline-none transition-colors placeholder:text-zinc-600 mb-4 resize-none"
+                            />
+
+                            <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-bold mb-2">Hidden Image (optional)</p>
+                            <div
+                                className={`mb-4 rounded-sm transition-colors ${stegoHiddenDragActive ? "ring-2 ring-purple-500/60 ring-offset-0" : ""}`}
+                                onDragEnter={handleStegoHiddenDragOver}
+                                onDragOver={handleStegoHiddenDragOver}
+                                onDragLeave={handleStegoHiddenDragLeave}
+                                onDrop={handleStegoHiddenDrop}
+                            >
+                                {stegoSecretImage ? (
+                                    <div className="relative group">
+                                        <img src={stegoSecretImage} alt="Secret" className="max-h-[160px] w-full object-contain rounded-sm border border-purple-900/40 bg-black" />
                                         <button
-                                            onClick={() => stegoSecretFileRef.current?.click()}
-                                            className="w-full mb-4 py-5 border-2 border-dashed border-purple-900/40 hover:border-purple-500/50 rounded-sm text-zinc-500 hover:text-purple-400 text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                                        >
-                                            Click to select secret image
-                                        </button>
-                                    )}
-                                    <input ref={stegoSecretFileRef} type="file" accept="image/*" className="hidden" onChange={handleStegoSecretImageSelect} />
-                                </>
-                            )}
-
-                            {isSecureRoom && (
-                                <div className="mb-4 border border-zinc-800/70 rounded-sm p-3 bg-zinc-900/30">
-                                    <p className="text-zinc-600 text-[9px] uppercase tracking-widest font-bold mb-2">Decode Received Stego PNG</p>
-                                    <button
-                                        onClick={() => stegoDecodeFileRef.current?.click()}
-                                        className="w-full py-2 border border-zinc-700/70 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-green-300 text-[10px] font-bold uppercase tracking-wider rounded-sm transition-colors cursor-pointer"
-                                    >
-                                        Select PNG to Decode
-                                    </button>
-                                    <input ref={stegoDecodeFileRef} type="file" accept="image/png,image/*" className="hidden" onChange={handleDecodeStegoFile} />
-
-                                    {stegoDecodeResult && (
-                                        <div className="mt-3 border border-green-900/40 bg-black/60 rounded-sm p-2">
-                                            <p className="text-[9px] text-green-400 font-bold uppercase tracking-wider mb-1">Decoded Payload</p>
-                                            {stegoDecodeResult?.mode === "image" && typeof stegoDecodeResult?.payload === "string" && stegoDecodeResult.payload.startsWith("data:image/") ? (
-                                                <img src={stegoDecodeResult.payload} alt="Decoded secret" className="max-h-[150px] w-full object-contain rounded-sm border border-green-900/40 bg-black" />
-                                            ) : (
-                                                <p className="text-xs text-zinc-200 font-mono break-all">{String(stegoDecodeResult?.payload ?? "")}</p>
-                                            )}
+                                            onClick={() => setStegoSecretImage(null)}
+                                            className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full bg-black/70 text-zinc-400 hover:text-white text-xs cursor-pointer"
+                                        >✕</button>
+                                        <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-purple-600/30 backdrop-blur-sm rounded-sm text-[8px] text-purple-300 font-bold uppercase tracking-wider">
+                                            Hidden
                                         </div>
-                                    )}
-                                </div>
-                            )}
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => stegoSecretFileRef.current?.click()}
+                                        className={`w-full py-5 border-2 border-dashed rounded-sm text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer ${stegoHiddenDragActive
+                                            ? "border-purple-500/60 text-purple-400 bg-purple-900/10"
+                                            : "border-purple-900/40 text-zinc-500 hover:border-purple-500/50 hover:text-purple-400"
+                                            }`}
+                                    >
+                                        Drop hidden image here or click to select
+                                    </button>
+                                )}
+                            </div>
+                            <input ref={stegoSecretFileRef} type="file" accept="image/*" className="hidden" onChange={handleStegoSecretImageSelect} />
+                            <p className="text-zinc-600 text-[9px] mb-4 leading-relaxed">
+                                At least one secret payload is required: secret text or hidden image.
+                            </p>
 
                             {/* Actions */}
                             <div className="flex gap-3">
@@ -2845,11 +3988,11 @@ const Page = () => {
                                 </motion.button>
                                 <motion.button
                                     onClick={sendStegoMessage}
-                                    disabled={!stegoImage || (stegoMode === "text" ? !stegoSecret.trim() : !stegoSecretImage) || stegoEncoding}
+                                    disabled={!stegoImage || (!stegoSecret.trim() && !stegoSecretImage) || stegoEncoding}
                                     className="flex-1 py-2.5 text-[10px] font-bold uppercase tracking-wider border border-purple-500/30 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                     whileTap={{ scale: 0.95 }}
                                 >
-                                    {stegoEncoding ? "Encoding..." : "Encode & Send"}
+                                    {stegoEncoding ? "Sending..." : "Send Hidden Payload"}
                                 </motion.button>
                             </div>
                         </motion.div>
@@ -2860,10 +4003,11 @@ const Page = () => {
             {/* ═══════════════════ FILE SEND MODAL ═══════════════════ */}
             <FileSendModal
                 isOpen={showFileSendModal}
-                onClose={() => setShowFileSendModal(false)}
+                onClose={closeFileSendModal}
                 onFileSend={handleSendFile}
                 participants={participants}
                 username={username}
+                preselectedFile={queuedDroppedFile}
             />
 
             {/* ═══════════════════ TRANSFER PROGRESS ═══════════════════ */}

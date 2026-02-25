@@ -1,7 +1,16 @@
 "use client"
 
-import { motion, AnimatePresence } from "framer-motion"
-import { useState, useRef, useCallback, useMemo } from "react"
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion"
+import { useState, useRef, useCallback, useMemo, useEffect } from "react"
+import { DUR_BASE, DUR_FAST, EASE_STANDARD, SPRING_SNAPPY } from "@/lib/motion-tokens"
+
+/**
+ * @param {unknown} value
+ */
+function normalizeParticipantName(value) {
+    if (typeof value !== "string") return ""
+    return value.trim().replace(/\s+/g, " ")
+}
 
 /**
  * Formats file size to human readable
@@ -15,11 +24,22 @@ function formatSize(bytes) {
 }
 
 /**
+ * @param {boolean} prefersReducedMotion
+ * @returns {import("framer-motion").Transition}
+ */
+function getPanelTransition(prefersReducedMotion) {
+    return prefersReducedMotion
+        ? { duration: DUR_BASE, ease: EASE_STANDARD }
+        : SPRING_SNAPPY
+}
+
+/**
  * File send modal — file picker → recipient selector → send
  *
- * @param {{ isOpen: boolean, onClose: () => void, onFileSend: (file: File, targets: string[]) => void, participants: string[], username: string }} props
+ * @param {{ isOpen: boolean, onClose: () => void, onFileSend: (file: File, targets: string[]) => void, participants: string[], username: string, preselectedFile?: File | null }} props
  */
-export function FileSendModal({ isOpen, onClose, onFileSend, participants, username }) {
+export function FileSendModal({ isOpen, onClose, onFileSend, participants, username, preselectedFile = null }) {
+    const prefersReducedMotion = useReducedMotion()
     const fileInputRef = useRef(null)
     const [dragActive, setDragActive] = useState(false)
     const [selectedFile, setSelectedFile] = useState(/** @type {File | null} */(null))
@@ -27,9 +47,14 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
     const [selectedTargets, setSelectedTargets] = useState(/** @type {string[]} */([]))
 
     // Filter out our own username from the list
+    const ownParticipantKey = normalizeParticipantName(username).toLocaleLowerCase()
     const otherParticipants = useMemo(
-        () => (participants || []).filter(p => p !== username),
-        [participants, username]
+        () => (participants || []).filter((p) => {
+            const normalized = normalizeParticipantName(p)
+            if (!normalized) return false
+            return normalized.toLocaleLowerCase() !== ownParticipantKey
+        }),
+        [participants, ownParticipantKey]
     )
 
     const handleFile = useCallback((/** @type {File | undefined} */ file) => {
@@ -84,6 +109,13 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
         if (e.dataTransfer.files?.[0]) handleFile(e.dataTransfer.files[0])
     }, [handleFile])
 
+    useEffect(() => {
+        if (!isOpen || !preselectedFile) return
+        setSelectedFile(preselectedFile)
+        setTargetMode("everyone")
+        setSelectedTargets([])
+    }, [isOpen, preselectedFile])
+
     return (
         <AnimatePresence>
             {isOpen && (
@@ -99,7 +131,7 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                         initial={{ scale: 0.9, opacity: 0, y: 20 }}
                         animate={{ scale: 1, opacity: 1, y: 0 }}
                         exit={{ scale: 0.95, opacity: 0, y: 10 }}
-                        transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                        transition={getPanelTransition(prefersReducedMotion)}
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-center justify-between mb-4">
@@ -107,7 +139,7 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                                 <span className="text-xl">📁</span>
                                 <h3 className="text-green-400 font-bold text-sm tracking-wide uppercase">P2P File Transfer</h3>
                             </div>
-                            <button onClick={handleClose} className="text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer">
+                            <button onClick={handleClose} className="micro-btn text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                     <path d="M18 6L6 18M6 6l12 12" />
                                 </svg>
@@ -127,7 +159,7 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                                     onDragLeave={handleDrag}
                                     onDragOver={handleDrag}
                                     onDrop={handleDrop}
-                                    className={`border-2 border-dashed rounded-sm p-8 text-center cursor-pointer transition-colors ${dragActive
+                                    className={`message-card border-2 border-dashed rounded-sm p-8 text-center cursor-pointer transition-colors ${dragActive
                                         ? "border-green-500/60 bg-green-950/20"
                                         : "border-zinc-700/50 hover:border-zinc-600/60 bg-zinc-900/20"
                                         }`}
@@ -154,7 +186,7 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                             <motion.div
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.2 }}
+                                transition={{ duration: DUR_FAST, ease: EASE_STANDARD }}
                             >
                                 {/* File preview */}
                                 <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-sm px-3 py-2 mb-4">
@@ -169,7 +201,7 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                                 {/* Send to everyone */}
                                 <button
                                     onClick={() => setTargetMode("everyone")}
-                                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-sm mb-1.5 border text-left transition-colors cursor-pointer ${targetMode === "everyone"
+                                    className={`micro-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-sm mb-1.5 border text-left transition-colors cursor-pointer ${targetMode === "everyone"
                                         ? "border-green-600/50 bg-green-950/30 text-green-400"
                                         : "border-zinc-700/40 bg-zinc-900/30 text-zinc-400 hover:border-zinc-600/50"
                                         }`}
@@ -190,7 +222,7 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                                         <button
                                             key={p}
                                             onClick={() => toggleTarget(p)}
-                                            className={`w-full flex items-center gap-3 px-3 py-2 rounded-sm border text-left transition-colors cursor-pointer ${targetMode === "custom" && selectedTargets.includes(p)
+                                            className={`micro-btn w-full flex items-center gap-3 px-3 py-2 rounded-sm border text-left transition-colors cursor-pointer ${targetMode === "custom" && selectedTargets.includes(p)
                                                 ? "border-green-600/50 bg-green-950/30 text-green-400"
                                                 : "border-zinc-700/40 bg-zinc-900/30 text-zinc-400 hover:border-zinc-600/50"
                                                 }`}
@@ -216,15 +248,17 @@ export function FileSendModal({ isOpen, onClose, onFileSend, participants, usern
                                     <motion.button
                                         onClick={handleSend}
                                         disabled={targetMode === "everyone" ? otherParticipants.length === 0 : selectedTargets.length === 0}
-                                        className="flex-1 py-2.5 rounded-sm border border-green-600/50 bg-green-950/40 hover:bg-green-900/40 text-green-400 text-xs font-bold tracking-wider transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                        whileTap={{ scale: 0.97 }}
+                                        className="micro-btn flex-1 py-2.5 rounded-sm border border-green-600/50 bg-green-950/40 hover:bg-green-900/40 text-green-400 text-xs font-bold tracking-wider transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                        whileHover={prefersReducedMotion ? {} : { y: -1 }}
+                                        whileTap={prefersReducedMotion ? {} : { scale: 0.97 }}
                                     >
                                         📤 SEND
                                     </motion.button>
                                     <motion.button
                                         onClick={handleClose}
-                                        className="flex-1 py-2.5 rounded-sm border border-zinc-700/50 bg-zinc-800/40 hover:bg-zinc-700/40 text-zinc-400 text-xs font-bold tracking-wider transition-colors cursor-pointer"
-                                        whileTap={{ scale: 0.97 }}
+                                        className="micro-btn flex-1 py-2.5 rounded-sm border border-zinc-700/50 bg-zinc-800/40 hover:bg-zinc-700/40 text-zinc-400 text-xs font-bold tracking-wider transition-colors cursor-pointer"
+                                        whileHover={prefersReducedMotion ? {} : { y: -1 }}
+                                        whileTap={prefersReducedMotion ? {} : { scale: 0.97 }}
                                     >
                                         CANCEL
                                     </motion.button>
@@ -258,13 +292,13 @@ export function FileOfferToast({ filename, fileSize, from, onAccept, onReject })
             <div className="flex gap-2">
                 <button
                     onClick={onAccept}
-                    className="flex-1 py-1.5 rounded-sm border border-green-900/50 bg-green-950/40 hover:bg-green-900/40 text-green-400 text-xs font-bold transition-colors cursor-pointer"
+                    className="micro-btn flex-1 py-1.5 rounded-sm border border-green-900/50 bg-green-950/40 hover:bg-green-900/40 text-green-400 text-xs font-bold transition-colors cursor-pointer"
                 >
                     Accept
                 </button>
                 <button
                     onClick={onReject}
-                    className="flex-1 py-1.5 rounded-sm border border-zinc-700/50 bg-zinc-800/40 hover:bg-zinc-700/40 text-zinc-400 text-xs font-bold transition-colors cursor-pointer"
+                    className="micro-btn flex-1 py-1.5 rounded-sm border border-zinc-700/50 bg-zinc-800/40 hover:bg-zinc-700/40 text-zinc-400 text-xs font-bold transition-colors cursor-pointer"
                 >
                     Reject
                 </button>
@@ -277,6 +311,7 @@ export function FileOfferToast({ filename, fileSize, from, onAccept, onReject })
  * Transfer progress bar
  */
 export function TransferProgress({ progress, filename, direction, status, onCancel }) {
+    const prefersReducedMotion = useReducedMotion()
     const pct = Math.round(progress * 100)
     const canCancel = direction === "send" && (status === "waiting" || status === "active")
 
@@ -288,7 +323,7 @@ export function TransferProgress({ progress, filename, direction, status, onCanc
                     initial={{ opacity: 0, y: 20, x: 20 }}
                     animate={{ opacity: 1, y: 0, x: 0 }}
                     exit={{ opacity: 0, y: 20 }}
-                    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                    transition={getPanelTransition(prefersReducedMotion)}
                 >
                     <div className="flex items-center gap-2 mb-2">
                         <span>{direction === "send" ? "📤" : "📥"}</span>
@@ -297,9 +332,10 @@ export function TransferProgress({ progress, filename, direction, status, onCanc
                     <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden mb-1">
                         <motion.div
                             className="h-full bg-green-500 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${pct}%` }}
-                            transition={{ duration: 0.3 }}
+                            style={{ transformOrigin: "0% 50%" }}
+                            initial={{ scaleX: 0 }}
+                            animate={{ scaleX: Math.max(0, Math.min(1, progress || 0)) }}
+                            transition={{ duration: prefersReducedMotion ? DUR_FAST : DUR_BASE, ease: EASE_STANDARD }}
                         />
                     </div>
                     <p className="text-[10px] text-zinc-500 font-mono">
@@ -318,7 +354,7 @@ export function TransferProgress({ progress, filename, direction, status, onCanc
                     {canCancel && (
                         <button
                             onClick={onCancel}
-                            className="mt-3 w-full py-1.5 rounded-sm border border-amber-700/50 bg-amber-950/30 hover:bg-amber-900/30 text-amber-300 text-[10px] font-bold tracking-wider transition-colors cursor-pointer"
+                            className="micro-btn mt-3 w-full py-1.5 rounded-sm border border-amber-700/50 bg-amber-950/30 hover:bg-amber-900/30 text-amber-300 text-[10px] font-bold tracking-wider transition-colors cursor-pointer"
                         >
                             STOP SENDING
                         </button>

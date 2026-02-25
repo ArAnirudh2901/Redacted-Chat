@@ -22,11 +22,11 @@
 Cypher Chat combines ephemeral messaging with modern peer-to-peer technologies for a secure communicating experience.
 
 - ⏳ **Self-Destructing Rooms** — Every room has a strict 10-minute timer. When time runs out, the room and all messages are permanently erased from the server.
-- 🖼️ **Image Steganography** — Hide sensitive text inside PNG cover images using lossless LSB encoding.
-- 🎯 **RDS3 Seeded-Lossless Stego** — Secure stego uses deterministic seeded random pixel walks keyed by the room key, with CRC integrity checks.
-- 📁 **P2P File Transfer** — Share unlimited files directly user-to-user over WebRTC. Files never touch a central server.
-- 🔐 **End-to-End Encryption** — Messages and files are secured client-side using AES-GCM envelopes before being transmitted.
-- ☢️ **Instant "Nuke"** — Destroy the room instantly with the click of a button, triggering a cinematic disintegration UI effect.
+- 🖼️ **Hidden Payload Messages** — Hide secret text or an image behind a normal preview image. The payload is encrypted and decoupled, revealing only when the recipient explicitly unlocks it.
+- 📁 **P2P File Transfer** — Share files directly user-to-user over WebRTC. Files never touch a central server, ensuring absolute privacy.
+- 🔐 **End-to-End Encryption** — Messages and payloads are secured client-side using AES-GCM before ever leaving the browser.
+- 💨 **Cinematic Disintegration** — Messages individually visually disperse into digital dust when they expire. 
+- ☢️ **Instant "Nuke" & Panic** — Destroy the entire room instantly with the click of a button, triggering a cinematic green pixel disintegration, or simply press `Esc` to immediately panic-close and wipe the room from existence.
 - 🕵️ **Anonymous & Accountless** — No accounts required. You are assigned a random codename, and access is controlled via temporary `httpOnly` tokens.
 - ⚡ **Lightning Fast** — Built with Upstash Realtime Server-Sent Events (SSE) and Elysia.js for blazing fast delivery.
 
@@ -40,8 +40,9 @@ Cypher Chat's architecture is built to guarantee privacy by design.
 2. **The Connection:** Your partner joins. Messages are instantly streamed via Upstash **Server-Sent Events (SSE)**.
 3. **The Data Path:** 
    - **Encrypted Text:** AES-GCM-encrypted on-device and relayed via Upstash streams/realtime.
-   - **Secure Stego Images:** Built client-side in a Web Worker (RDS3 seeded-lossless), then sent via direct **WebRTC P2P**. The server acts as a blind relay for signaling only.
-4. **The Cleanup:** When the timer hits zero (or "Destroy" is pressed), everything drops. No traces are kept.
+   - **Hidden Payload Messages:** The preview image + hidden payload packet are assembled client-side and sent as encrypted chat messages.
+   - **P2P Files:** Sent directly over WebRTC data channels negotiated via the secure room signaling.
+4. **The Cleanup:** When the timer hits zero (or "Destroy" is pressed via UI or `Esc`), everything drops. No traces are kept.
 
 <details>
 <summary><b>View Architecture Diagram</b></summary>
@@ -97,30 +98,25 @@ Want to run your own zero-trace server?
 
 ---
 
-## �️ The Technology Behind Cypher Chat
+## 💻 The Technology Behind Cypher Chat
 
 - **Core:** Next.js (App Router), React, Tailwind CSS 4, Framer Motion
 - **Backend / APIs:** Elysia.js, Eden Treaty SDK, Zod (Validation)
 - **Real-Time Data:** Upstash Realtime (SSE)
 - **Database / State:** Upstash Redis (TTL Caching)
 - **P2P & Crypto:** WebRTC (`simple-peer`), Native Web Crypto API (AES-GCM)
-- **Steganography:** Sharp (Lossless PNG manipulation) 
+- **Effects:** HTML2Canvas, custom particle disintegration engines
 
 ---
 
-## 🔐 RDS3 Secure Stego (Default)
+## 🔐 Hidden Payload Architecture
 
-- **Gatekeeper-derived key:** Room key is derived client-side via PBKDF2 and never sent to the server.
-- **Seeded random walk:** Pixel selection is deterministic and non-repeating, generated from the room key.
-- **Embedding model:** Encrypted payload bits are written to LSBs of R/G/B channels on selected pixels.
-- **Integrity check:** CRC32 validates payload integrity before decrypt.
-- **Format:** `RDS3` header + metadata + encrypted ciphertext, output as strict `PNG` at `1920x1080`.
-- **Fail-closed behavior:** If Worker/Canvas/WebCrypto prerequisites are missing, secure stego send is blocked.
+Cypher Chat uses a "lossless" approach to hide secret payloads rather than traditional fragile steganography:
 
-### Compatibility
-
-- Legacy formats are still decodable for backwards compatibility: `RDS3 -> RDS2 -> legacy STEG`.
-- Legacy server-side stego endpoints remain available for compatibility, but are not used by the secure default flow.
+- **Gatekeeper Derived Key:** The room key is derived client-side via PBKDF2 from a shared security question and never sent to the server.
+- **Payload Contract:** Each hidden message creates a composite packet containing a visible "cover" image and an encrypted payload containing secret text, an image, or both.
+- **Reveal UX:** Hidden content is completely decoupled from the cover image pixels. It extracts and displays flawlessly 100% of the time only when the user chooses to "Reveal" it locally.
+- **Size Safety:** Images are efficiently compressed client-side before transmission, ensuring blazing fast realtime delivery.
 
 ---
 

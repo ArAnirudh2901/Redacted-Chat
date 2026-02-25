@@ -64,7 +64,7 @@ const verifyProofSchema = z.object({
 
 const encryptedEnvelopeSchema = z.object({
     v: z.literal(1),
-    kind: z.enum(["text", "stego.notice", "stego.payload"]),
+    kind: z.literal("text"),
     ivHex: z.string().regex(/^[0-9a-fA-F]{24}$/),
     cipherHex: z.string().regex(/^[0-9a-fA-F]+$/).max(1_500_000),
     aadHex: z.string().regex(/^[0-9a-fA-F]*$/).optional(),
@@ -453,6 +453,7 @@ const rooms = new Elysia({ prefix: "/room" })
                 kdfIterations: Number(mode.meta.kdfIterations || 100_000),
                 maxParticipants: Number(mode.meta.maxParticipants || MIN_PARTICIPANTS),
                 hasPassword: false,
+                hasPanicPassword: false,
             }
         }
 
@@ -461,6 +462,7 @@ const rooms = new Elysia({ prefix: "/room" })
             exists: true,
             secure: false,
             hasPassword: !!meta.password,
+            hasPanicPassword: !!meta.panicPassword,
             securityQuestion: meta.securityQuestion || null,
         }
     })
@@ -814,7 +816,7 @@ const bodySchema = z.object({
     sender: z.string().max(1_000_000),
     text: z.string().max(1_000_000),
     vanishAfter: z.number().int().min(5).max(300).optional(),
-    type: z.enum(["text", "stego", "audio"]).default("text"),
+    type: z.enum(["text", "stego", "audio", "file"]).default("text"),
 })
 
 const messages = new Elysia({ prefix: "/messages" })

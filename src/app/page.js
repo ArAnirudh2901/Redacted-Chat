@@ -4,16 +4,49 @@ import { useUsername } from "@/hooks/use-username";
 import { useAuth } from "@/hooks/use-auth";
 import { client } from "@/lib/client";
 import { useMutation } from "@tanstack/react-query";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { CyberCanvas } from "@/components/cyber-canvas";
 import { deriveGatekeeperProofHex, deriveRoomKeyHex, persistRoomKey, randomHex } from "@/lib/secure-crypto";
+import { DUR_BASE, DUR_FAST, DUR_SLOW, EASE_STANDARD } from "@/lib/motion-tokens";
 
-/** @type {[number, number, number, number]} */
-const ease = [0.22, 1, 0.36, 1]
+const ease = EASE_STANDARD
+
+/**
+ * @param {string} key
+ */
+const normalizeShortcutKey = (key) => {
+  if (!key || typeof key !== "string") return ""
+  if (key === "Control" || key === "Meta" || key === "Alt" || key === "Shift") return ""
+  if (key === " ") return "Space"
+  if (key === "Escape") return "Esc"
+  if (key === "ArrowUp") return "Up"
+  if (key === "ArrowDown") return "Down"
+  if (key === "ArrowLeft") return "Left"
+  if (key === "ArrowRight") return "Right"
+  if (key.length === 1) return key.toUpperCase()
+  return key
+}
+
+/**
+ * @param {KeyboardEvent} event
+ */
+const shortcutFromKeyboardEvent = (event) => {
+  if (!event || event.repeat) return ""
+  const key = normalizeShortcutKey(event.key)
+  if (!key) return ""
+  const parts = []
+  if (event.ctrlKey) parts.push("Ctrl")
+  if (event.metaKey) parts.push("Meta")
+  if (event.altKey) parts.push("Alt")
+  if (event.shiftKey) parts.push("Shift")
+  if (parts.length === 0) return ""
+  parts.push(key)
+  return parts.join("+")
+}
 
 /* ── Reusable styled input ── */
 const StyledInput = ({ label = null, icon = null, ...props }) => (
@@ -40,8 +73,8 @@ function CreateRoomModal({ isOpen, onClose, onSubmit, isPending }) {
   const [showPassword, setShowPassword] = useState(false)
   const [securityQuestion, setSecurityQuestion] = useState("")
   const [securityAnswer, setSecurityAnswer] = useState("")
-  const [panicPassword, setPanicPassword] = useState("")
-  const [showPanicPassword, setShowPanicPassword] = useState(false)
+  const [panicShortcut, setPanicShortcut] = useState("")
+  const [isRecordingPanicShortcut, setIsRecordingPanicShortcut] = useState(false)
 
   // Password strength checks
   const pwChecks = {
@@ -58,15 +91,36 @@ function CreateRoomModal({ isOpen, onClose, onSubmit, isPending }) {
   const handleSubmit = () => {
     const config = { ttlMinutes: isPermanent ? 0 : ttlMinutes, maxParticipants }
     if (password.trim()) config.password = password.trim()
-    if (panicPassword.trim()) config.panicPassword = panicPassword.trim()
-    if (securityQuestion.trim()) {
-      config.securityQuestion = securityQuestion.trim()
-      config.securityAnswer = securityAnswer.trim()
+    if (panicShortcut.trim()) config.panicPassword = panicShortcut.trim()
+    const question = securityQuestion.trim()
+    const answer = securityAnswer.trim()
+    if (question && answer) {
+      config.securityQuestion = question
+      config.securityAnswer = answer
     }
     onSubmit(config)
   }
 
-  const canSubmit = !isPending && (!securityQuestion.trim() || securityAnswer.trim()) && pwValid && (panicPassword.trim() === '' || panicPassword !== password)
+  const canSubmit = !isPending && pwValid && (panicShortcut.trim() === '' || panicShortcut !== password)
+
+  const handlePanicShortcutKeyDown = (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (event.key === "Backspace" || event.key === "Delete") {
+      setPanicShortcut("")
+      return
+    }
+    if (event.key === "Escape") {
+      setIsRecordingPanicShortcut(false)
+      return
+    }
+
+    const shortcut = shortcutFromKeyboardEvent(event.nativeEvent)
+    if (!shortcut) return
+    setPanicShortcut(shortcut)
+    setIsRecordingPanicShortcut(false)
+  }
 
   return (
     <AnimatePresence>
@@ -76,7 +130,7 @@ function CreateRoomModal({ isOpen, onClose, onSubmit, isPending }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ duration: DUR_FAST, ease }}
         >
           {/* Backdrop */}
           <motion.div
@@ -93,7 +147,7 @@ function CreateRoomModal({ isOpen, onClose, onSubmit, isPending }) {
             initial={{ opacity: 0, scale: 0.92, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            transition={{ duration: 0.35, ease }}
+            transition={{ duration: DUR_SLOW, ease }}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/60">
@@ -242,37 +296,54 @@ function CreateRoomModal({ isOpen, onClose, onSubmit, isPending }) {
                 </div>
               )}
 
-              {/* Panic Password */}
+              {/* Panic Shortcut */}
               <div className="space-y-1.5">
                 <label className="flex items-center gap-2 text-zinc-500 text-[10px] uppercase tracking-widest font-bold">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-500">
                     <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                     <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
                   </svg>
-                  Panic Password
+                  Panic Shortcut
                   <span className="text-zinc-600 normal-case tracking-normal">(optional — instant destroy)</span>
                 </label>
                 <div className="relative">
                   <input
-                    type={showPanicPassword ? "text" : "password"}
-                    value={panicPassword}
-                    onChange={(e) => setPanicPassword(e.target.value)}
-                    placeholder="Enter this in room to destroy instantly"
-                    className="w-full bg-zinc-950 border border-red-900/40 focus:border-red-500/60 p-2.5 pr-10 text-sm text-red-300 font-mono rounded-sm outline-none transition-colors placeholder:text-zinc-600"
+                    type="text"
+                    value={panicShortcut}
+                    readOnly
+                    onFocus={() => setIsRecordingPanicShortcut(true)}
+                    onBlur={() => setIsRecordingPanicShortcut(false)}
+                    onKeyDown={handlePanicShortcutKeyDown}
+                    placeholder="Click and press keys (e.g. Ctrl+Shift+K)"
+                    className={`w-full bg-zinc-950 border border-red-900/40 focus:border-red-500/60 p-2.5 pr-24 text-sm text-red-300 font-mono rounded-sm outline-none transition-colors placeholder:text-zinc-600 ${isRecordingPanicShortcut ? "ring-1 ring-red-500/40" : ""}`}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPanicPassword(!showPanicPassword)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors"
-                  >
-                    {showPanicPassword ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
-                    ) : (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
-                    )}
-                  </button>
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setIsRecordingPanicShortcut((prev) => !prev)}
+                      className="px-2 py-0.5 text-[10px] font-bold rounded border border-zinc-700/70 bg-zinc-900/70 text-zinc-300 hover:text-zinc-100 transition-colors"
+                    >
+                      {isRecordingPanicShortcut ? "REC" : "SET"}
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setPanicShortcut("")}
+                      disabled={!panicShortcut}
+                      className="w-5 h-5 text-[11px] rounded border border-zinc-700/70 bg-zinc-900/70 text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      title="Clear shortcut"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
-                {panicPassword && panicPassword === password && (
+                <p className="text-zinc-600 text-[9px] font-mono">
+                  {isRecordingPanicShortcut
+                    ? "Recording... press combo with at least one modifier key."
+                    : "This combo will trigger panic destroy in-room."}
+                </p>
+                {panicShortcut && panicShortcut === password && (
                   <p className="text-red-400 text-[9px] font-bold">⚠ Must be different from room password</p>
                 )}
               </div>
@@ -302,7 +373,7 @@ function CreateRoomModal({ isOpen, onClose, onSubmit, isPending }) {
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   Security Answer
-                  {securityQuestion.trim() && <span className="text-red-400 normal-case tracking-normal">*required</span>}
+                  <span className="text-zinc-600 normal-case tracking-normal">(optional, used only with question)</span>
                 </label>
                 <input
                   type="text"
@@ -420,6 +491,7 @@ function VerifyRoomModal({ isOpen, onClose, roomId, hasPassword, securityQuestio
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={{ duration: DUR_FAST, ease }}
         >
           <motion.div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
           <motion.div
@@ -427,7 +499,7 @@ function VerifyRoomModal({ isOpen, onClose, roomId, hasPassword, securityQuestio
             initial={{ opacity: 0, scale: 0.92, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            transition={{ duration: 0.35, ease }}
+            transition={{ duration: DUR_SLOW, ease }}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/60">
               <div className="flex items-center gap-2">
@@ -520,6 +592,7 @@ function VerifyRoomModal({ isOpen, onClose, roomId, hasPassword, securityQuestio
    ═══════════════════════════════════════════════════════════════ */
 function HomeContent() {
   const router = useRouter()
+  const prefersReducedMotion = useReducedMotion()
   const { username } = useUsername()
   const { user: authUser, updateUsername: authUpdateUsername, updateAvatar: authUpdateAvatar } = useAuth()
   const displayName = authUser?.username || username
@@ -687,6 +760,14 @@ function HomeContent() {
       if (res.status === 200) {
         const newRoomId = res.data?.roomId
         setShowCreateModal(false)
+
+        const panicShortcut = typeof config?.panicPassword === "string" ? config.panicPassword.trim() : ""
+        if (typeof window !== "undefined" && newRoomId && panicShortcut) {
+          sessionStorage.setItem(`panic-shortcut:${newRoomId}`, JSON.stringify({
+            combo: panicShortcut,
+            panicPassword: panicShortcut,
+          }))
+        }
 
         // Auto-track permanent rooms for logged-in users
         // @ts-ignore
@@ -858,22 +939,22 @@ function HomeContent() {
       <motion.div
         className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full pointer-events-none"
         style={{ background: "radial-gradient(circle, rgba(34,197,94,0.04) 0%, transparent 70%)" }}
-        animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
-        transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+        animate={prefersReducedMotion ? { opacity: 0.55 } : { scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
+        transition={prefersReducedMotion ? { duration: DUR_BASE, ease } : { duration: 6, repeat: Infinity, ease: "easeInOut" }}
       />
 
       <motion.div
         className="w-full max-w-md space-y-6 relative z-10 px-4 sm:px-0"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
+        transition={{ duration: DUR_BASE, ease }}
       >
         {/* ── Lock Icon ── */}
         <motion.div
           className="flex justify-center"
           initial={{ opacity: 0, scale: 0.5, rotate: -10 }}
-          animate={{ opacity: 1, scale: 1, rotate: 0 }}
-          transition={{ duration: 0.6, delay: 0.05, ease }}
+          animate={prefersReducedMotion ? { opacity: 1, scale: 1, rotate: 0 } : { opacity: 1, scale: 1, rotate: 0 }}
+          transition={{ duration: DUR_SLOW, delay: 0.05, ease }}
         >
           <div className="w-12 h-12 rounded-full border border-green-500/20 bg-green-500/5 flex items-center justify-center animate-float">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-green-500">
@@ -888,7 +969,7 @@ function HomeContent() {
           className="text-center space-y-2"
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.15, ease }}
+          transition={{ duration: DUR_SLOW, delay: 0.15, ease }}
         >
           <h1 className="text-2xl font-bold tracking-tight text-green-500 animate-flicker">
             {">"}redacted.chat
@@ -897,14 +978,14 @@ function HomeContent() {
             className="text-zinc-500 text-sm"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.4 }}
+            transition={{ duration: DUR_BASE, delay: 0.4, ease }}
           >
             {"A private, self-destructing chat room.".split("").map((ch, i) => (
               <motion.span
                 key={i}
                 initial={{ opacity: 0, filter: "blur(4px)" }}
-                animate={{ opacity: 1, filter: "blur(0px)" }}
-                transition={{ duration: 0.3, delay: 0.5 + i * 0.02 }}
+                animate={prefersReducedMotion ? { opacity: 1, filter: "blur(0px)" } : { opacity: 1, filter: "blur(0px)" }}
+                transition={{ duration: DUR_FAST, delay: 0.5 + i * 0.02, ease }}
               >{ch}</motion.span>
             ))}
           </motion.p>
@@ -915,18 +996,18 @@ function HomeContent() {
           ref={cardRef}
           className="glass p-6 rounded-sm relative overflow-hidden card-3d"
           initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0, rotateX: tilt.x, rotateY: tilt.y }}
-          transition={{ duration: 0.6, delay: 0.25, ease, rotateX: { duration: 0.15 }, rotateY: { duration: 0.15 } }}
-          onMouseMove={handleCardMouse}
-          onMouseLeave={resetTilt}
+          animate={prefersReducedMotion ? { opacity: 1, y: 0, rotateX: 0, rotateY: 0 } : { opacity: 1, y: 0, rotateX: tilt.x, rotateY: tilt.y }}
+          transition={{ duration: DUR_SLOW, delay: 0.25, ease, rotateX: { duration: DUR_FAST }, rotateY: { duration: DUR_FAST } }}
+          onMouseMove={prefersReducedMotion ? undefined : handleCardMouse}
+          onMouseLeave={prefersReducedMotion ? undefined : resetTilt}
         >
           {/* Shimmer overlay on card */}
           <motion.div
             className="absolute inset-0 pointer-events-none"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 1.5 }}
-          >
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 1.5, duration: DUR_BASE, ease }}
+            >
             <div className="animate-shimmer absolute inset-0 rounded-sm" />
           </motion.div>
 
@@ -936,7 +1017,7 @@ function HomeContent() {
               className="space-y-3"
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.4, delay: 0.35, ease }}
+              transition={{ duration: DUR_BASE, delay: 0.35, ease }}
             >
               <label className="flex items-center gap-2 text-zinc-500 text-xs uppercase tracking-widest font-bold">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-teal-400">
@@ -955,8 +1036,8 @@ function HomeContent() {
                     <motion.button
                       onClick={() => avatarInputRef.current?.click()}
                       className="relative w-16 h-16 rounded-full border-2 border-zinc-700 hover:border-green-500/50 bg-zinc-900 flex items-center justify-center overflow-hidden transition-all cursor-pointer"
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
+                      whileHover={prefersReducedMotion ? {} : { scale: 1.05 }}
+                      whileTap={prefersReducedMotion ? {} : { scale: 0.95 }}
                       disabled={avatarUploading}
                     >
                       {authUser.avatar ? (
@@ -1039,7 +1120,7 @@ function HomeContent() {
                           onClick={saveUsername}
                           disabled={usernameSaving || usernameAvailable === false || usernameChecking || !editUsername.trim() || editUsername.trim().length < 3}
                           className="flex-1 py-1.5 text-[10px] font-bold uppercase tracking-wider border border-green-500/30 bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                          whileTap={{ scale: 0.97 }}
+                          whileTap={prefersReducedMotion ? {} : { scale: 0.97 }}
                         >
                           {usernameSaving ? "Saving..." : "Save"}
                         </motion.button>
@@ -1067,7 +1148,7 @@ function HomeContent() {
                     className="flex-1 bg-zinc-950 border border-zinc-800 p-3 text-sm text-zinc-400 font-mono text-center rounded-sm"
                     initial={{ opacity: 0, scaleX: 0.8 }}
                     animate={{ opacity: 1, scaleX: 1 }}
-                    transition={{ duration: 0.4, delay: 0.45, ease }}
+                    transition={{ duration: DUR_BASE, delay: 0.45, ease }}
                   >
                     {displayName}
                   </motion.div>
@@ -1082,19 +1163,19 @@ function HomeContent() {
               className="w-full bg-zinc-200 text-black p-3 text-sm font-bold hover:bg-white transition-all mt-2 cursor-pointer disabled:opacity-50 rounded-sm relative overflow-hidden group scan-line-btn"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.55, ease }}
-              whileHover={{ scale: 1.015 }}
-              whileTap={{ scale: 0.985 }}
+              transition={{ duration: DUR_BASE, delay: 0.55, ease }}
+              whileHover={prefersReducedMotion ? {} : { scale: 1.015 }}
+              whileTap={prefersReducedMotion ? {} : { scale: 0.985 }}
               onHoverStart={() => setIsHovered(true)}
               onHoverEnd={() => setIsHovered(false)}
             >
               {/* Subtle shine sweep on hover */}
               <motion.div
-                className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12"
-                initial={{ x: "-100%" }}
-                animate={isHovered ? { x: "200%" } : { x: "-100%" }}
-                transition={{ duration: 0.6, ease: "easeInOut" }}
-              />
+              className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12"
+              initial={{ x: "-100%" }}
+              animate={prefersReducedMotion ? { x: "-100%" } : (isHovered ? { x: "200%" } : { x: "-100%" })}
+              transition={{ duration: DUR_SLOW, ease: "easeInOut" }}
+            />
               <span className="relative z-10">Create a Secure Room</span>
             </motion.button>
           </div>
@@ -1105,7 +1186,7 @@ function HomeContent() {
           className="glass p-5 rounded-sm relative overflow-hidden"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.4, ease }}
+          transition={{ duration: DUR_SLOW, delay: 0.4, ease }}
         >
           <div className="space-y-3 relative z-10">
             <label className="flex items-center gap-2 text-zinc-500 text-[10px] uppercase tracking-widest font-bold">
@@ -1127,8 +1208,8 @@ function HomeContent() {
                 onClick={handleJoinRoom}
                 disabled={!joinRoomId.trim() || isJoining}
                 className="bg-green-600/20 hover:bg-green-600/30 border border-green-500/30 hover:border-green-400/40 text-green-400 hover:text-green-300 px-5 py-2.5 text-sm font-bold rounded-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                whileHover={joinRoomId.trim() ? { scale: 1.03 } : {}}
-                whileTap={joinRoomId.trim() ? { scale: 0.97 } : {}}
+                whileHover={prefersReducedMotion ? {} : (joinRoomId.trim() ? { scale: 1.03 } : {})}
+                whileTap={prefersReducedMotion ? {} : (joinRoomId.trim() ? { scale: 0.97 } : {})}
               >
                 {isJoining ? (
                   <motion.svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
@@ -1145,7 +1226,7 @@ function HomeContent() {
           className="text-center text-[10px] text-zinc-600 tracking-wide"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.8 }}
+          transition={{ duration: DUR_BASE, delay: 0.8, ease }}
         >
           End-to-end encrypted · Messages auto-delete · No logs
         </motion.p>
@@ -1156,7 +1237,7 @@ function HomeContent() {
             className="text-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ duration: 0.5, delay: 0.9 }}
+            transition={{ duration: DUR_BASE, delay: 0.9, ease }}
           >
             <Link
               href="/auth"
