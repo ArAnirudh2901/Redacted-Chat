@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🔒 Cypher Chat </h1>
+  <h1>🔒 Redacted Chat </h1>
   <p><strong>A real-time, zero-trace, peer-to-peer chat application built for absolute privacy.</strong></p>
   <i>Conversations that leave no metadata, no server logs, and absolutely no trace.</i>
   
@@ -17,9 +17,9 @@
 
 ---
 
-## ✨ Why Cypher Chat?
+## ✨ Why Redacted Chat?
 
-Cypher Chat combines ephemeral messaging with modern peer-to-peer technologies for a secure communicating experience.
+Redacted Chat combines ephemeral messaging with modern peer-to-peer technologies for a secure communicating experience.
 
 - ⏳ **Self-Destructing Rooms** — Every room has a strict 10-minute timer. When time runs out, the room and all messages are permanently erased from the server.
 - 🖼️ **Hidden Payload Messages** — Hide secret text or an image behind a normal preview image. The payload is encrypted and decoupled, revealing only when the recipient explicitly unlocks it.
@@ -34,7 +34,7 @@ Cypher Chat combines ephemeral messaging with modern peer-to-peer technologies f
 
 ## 🏗️ How It Works
 
-Cypher Chat's architecture is built to guarantee privacy by design.
+Redacted Chat's architecture is built to guarantee privacy by design.
 
 1. **The Sandbox:** You create a room with a security question. Clients derive a room key locally (PBKDF2), while the server stores only room/session metadata with TTL.
 2. **The Connection:** Your partner joins. Messages are instantly streamed via Upstash **Server-Sent Events (SSE)**.
@@ -98,7 +98,7 @@ Want to run your own zero-trace server?
 
 ---
 
-## 💻 The Technology Behind Cypher Chat
+## 💻 The Technology Behind Redacted Chat
 
 - **Core:** Next.js (App Router), React, Tailwind CSS 4, Framer Motion
 - **Backend / APIs:** Elysia.js, Eden Treaty SDK, Zod (Validation)
@@ -111,7 +111,7 @@ Want to run your own zero-trace server?
 
 ## 🔐 Hidden Payload Architecture
 
-Cypher Chat uses a "lossless" approach to hide secret payloads rather than traditional fragile steganography:
+Redacted Chat uses a "lossless" approach to hide secret payloads rather than traditional fragile steganography:
 
 - **Gatekeeper Derived Key:** The room key is derived client-side via PBKDF2 from a shared security question and never sent to the server.
 - **Payload Contract:** Each hidden message creates a composite packet containing a visible "cover" image and an encrypted payload containing secret text, an image, or both.
